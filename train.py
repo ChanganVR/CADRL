@@ -71,7 +71,7 @@ def propagate(state, v_est, delta_t=1):
         new_px = state.px + math.cos(v_est.r) * v_est.v
         new_py = state.py + math.sin(v_est.r) * v_est.v
         state = FullState(new_px, new_py, state.vx, state.vy, state.radius,
-                          state.pgx, state.pgy, state.v_pref, state.theta)
+                          state.pgx, state.pgy, state.v_pref, state.theta+v_est.r)
     else:
         raise ValueError('Type error')
 
@@ -79,6 +79,7 @@ def propagate(state, v_est, delta_t=1):
 
 
 def build_action_space(v_pref):
+    # permissible actions, rotation speed should be smaller than v_pref if the minimum turning radius is 1.0m
     velocities = [i/5*v_pref for i in range(5)]
     rotations = [i/5*math.pi/3 - math.pi/6 for i in range(5)]
     actions = [Action(*x) for x in itertools.product(velocities, rotations)]
