@@ -1,6 +1,26 @@
+import torch
 import torch.nn as nn
-from scipy.spatial import distance
+
 import numpy as np
+
+
+class IndexTranslator(object):
+    def __init__(self, state):
+        self.state = state
+        self.px = self.state[:, 0].reshape(-1, 1)
+        self.py = self.state[:, 1].reshape(-1, 1)
+        self.vx = self.state[:, 2].reshape(-1, 1)
+        self.vy = self.state[:, 3].reshape(-1, 1)
+        self.radius = self.state[:, 4].reshape(-1, 1)
+        self.pgx = self.state[:, 5].reshape(-1, 1)
+        self.pgy = self.state[:, 6].reshape(-1, 1)
+        self.v_pref = self.state[:, 7].reshape(-1, 1)
+        self.theta = self.state[:, 8].reshape(-1, 1)
+        self.px1 = self.state[:, 9].reshape(-1, 1)
+        self.py1 = self.state[:, 10].reshape(-1, 1)
+        self.vx1 = self.state[:, 11].reshape(-1, 1)
+        self.vy1 = self.state[:, 12].reshape(-1, 1)
+        self.radius1 = self.state[:, 13].reshape(-1, 1)
 
 
 class ValueNetwork(nn.Module):
@@ -17,11 +37,14 @@ class ValueNetwork(nn.Module):
     @staticmethod
     def rotate(state):
         # first translate the coordinate then rotate around the origin
+        # 'px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta', 'px1', 'py1', 'vx1', 'vy1', 'radius1'
+        #  0     1      2     3      4        5     6         7        8       9      10     11    12       13
+        state = IndexTranslator(state.numpy())
         dx = state.pgx - state.px
         dy = state.pgy - state.py
-        rot = np.arctan2(state.pgx-state.px, state.pgy-state.py)+np.pi
+        rot = np.arctan2(state.pgx-state.px, state.pgy-state.py) + np.pi
 
-        dg = distance.euclidean((state.px, state.py), (state.pgx, state.pgy))
+        dg = np.linalg.norm(np.concatenate([dx, dy], axis=1), axis=1, keepdims=True)
         v_pref = state.v_pref
         vx = state.vx * np.cos(rot) + state.vy * np.sin(rot)
         vy = state.vy * np.cos(rot) - state.vx * np.sin(rot)
@@ -35,11 +58,11 @@ class ValueNetwork(nn.Module):
         radius_sum = radius + radius1
         cos_theta = np.cos(theta)
         sin_theta = np.sin(theta)
-        da = distance.euclidean((state.px, state.py), (state.px1, state.py1))
+        da = np.linalg.norm(np.concatenate([state.px - state.px1, state.py - state.py1], axis=1), axis=1, keepdims=True)
 
-        new_state = (dg, v_pref, vx, vy, radius, theta, vx1, vy1, px1, py1,
-                     radius1, radius_sum, cos_theta, sin_theta, da)
-        return new_state
+        new_state = np.concatenate([dg, v_pref, vx, vy, radius, theta, vx1, vy1, px1, py1,
+                                    radius1, radius_sum, cos_theta, sin_theta, da], axis=1)
+        return torch.Tensor(new_state)
 
     def forward(self, state):
         if self.reparametrization:
