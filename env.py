@@ -24,7 +24,7 @@ class Agent(object):
         self.theta = theta
         self.kinematic_constrained = kinematic_constrained
 
-    def update_state(self, action, time=1):
+    def update_state(self, action, time):
         self.px, self.py = self.compute_position(time=time, action=action)
         if self.kinematic_constrained:
             pass
@@ -72,7 +72,7 @@ class ENV(object):
         self.ymax = config.getfloat('sim', 'ymax')
         self.crossing_radius = config.getfloat('sim', 'crossing_radius')
         self.max_time = config.getint('sim', 'max_time')
-        self.agents = list()
+        self.agents = [None, None]
         self.counter = 0
 
     def compute_joint_state(self, agent_idx):
@@ -83,8 +83,8 @@ class ENV(object):
     def reset(self):
         # randomly initialize the agents' positions
         cr = self.crossing_radius
-        self.agents.append(Agent(-cr, 0, cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained))
-        self.agents.append(Agent(cr, 0, -cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained))
+        self.agents[0] = Agent(-cr, 0, cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained)
+        self.agents[1] = Agent(cr, 0, -cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained)
         self.counter = 0
 
         return [self.compute_joint_state(0), self.compute_joint_state(1)]
@@ -106,13 +106,14 @@ class ENV(object):
             if distance < dmin:
                 dmin = distance
                 dmin_time = time
-        reached_goal = math.sqrt((agent.px - agent.pgx)**2 + (agent.py - agent.pgy)**2) < self.radius
+        final_pos = agent.compute_position(1, actions[agent_idx])
+        reached_goal = math.sqrt((final_pos[0] - agent.pgx)**2 + (final_pos[1] - agent.pgy)**2) < self.radius
 
         if dmin < self.radius * 2:
             reward = -0.25
             end_time = dmin_time
         else:
-            end_time = -1
+            end_time = 1
             if dmin < self.radius * 2 + 0.2:
                 reward = -0.1 - dmin/2
             elif reached_goal:
@@ -131,7 +132,6 @@ class ENV(object):
         Take actions of all agents as input, output the rewards and states of each agent.
         Hitting the boundary or exceeding the maximum time will emit the done signal, but not negative reward
         """
-        states = []
         rewards = []
         done_signals = []
         end_times = []
@@ -151,12 +151,14 @@ class ENV(object):
             done_signals.append(done)
             end_times.append(end_time)
 
+        # collision is mutual
         if rewards[0] == -0.25 or rewards[1] == -0.25:
             assert rewards[0] == rewards[1]
 
         for agent_idx in range(2):
             self.agents[agent_idx].update_state(actions[agent_idx], end_times[agent_idx])
-            states.append(self.compute_joint_state(agent_idx))
+        states = [(self.compute_joint_state(agent_idx)) for agent_idx in range(2)]
         self.counter += 1
 
         return states, rewards, done_signals
+

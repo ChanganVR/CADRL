@@ -62,7 +62,6 @@ def propagate(state, v_est, kinematic_constrained, delta_t=1):
         # propagate state of the other agent
         new_px = state.px + v_est.x * delta_t
         new_py = state.py + v_est.y * delta_t
-        # TODO: how to propagate
         state = ObservableState(new_px, new_py, v_est.x, v_est.y, state.radius)
     elif isinstance(state, FullState) and isinstance(v_est, Action):
         # propagate state of current agent
@@ -255,15 +254,15 @@ def main():
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
 
     # initialize model
-    # initialized_model = initialize(model, model_config, env_config)
-    # torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
-    # logging.info('Finish initializing model. Model saved')
-    model.load_state_dict(torch.load('data/initialized_model.pth'))
+    initialized_model = initialize(model, model_config, env_config)
+    torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
+    logging.info('Finish initializing model. Model saved')
+    # model.load_state_dict(torch.load('data/initialized_model.pth'))
 
     # train the model
-    trained_model = train(model, model_config, env_config)
-    torch.save(trained_model.state_dict(), 'data/trained_model.pth')
-    logging.info('Finish initializing model. Model saved')
+    # trained_model = train(model, model_config, env_config)
+    # torch.save(trained_model.state_dict(), 'data/trained_model.pth')
+    # logging.info('Finish initializing model. Model saved')
 
 
 if __name__ == '__main__':
