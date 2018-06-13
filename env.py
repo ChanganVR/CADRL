@@ -110,9 +110,9 @@ class ENV(object):
 
         if dmin < self.radius * 2:
             reward = -0.25
-            stopping_time = dmin_time
+            end_time = dmin_time
         else:
-            stopping_time = -1
+            end_time = -1
             if dmin < self.radius * 2 + 0.2:
                 reward = -0.1 - dmin/2
             elif reached_goal:
@@ -120,7 +120,7 @@ class ENV(object):
             else:
                 reward = 0
 
-        return reward, stopping_time
+        return reward, end_time
 
     def check_boundary(self, agent_idx):
         agent = self.agents[agent_idx]
@@ -129,24 +129,33 @@ class ENV(object):
     def step(self, actions):
         """
         Take actions of all agents as input, output the rewards and states of each agent.
-
+        Hitting the boundary or exceeding the maximum time will emit the done signal, but not negative reward
         """
         states = []
         rewards = []
         done_signals = []
-        stopping_times = []
+        end_times = []
         for agent_idx in range(self.agent_num):
-            reward, stopping_time = self.compute_reward(agent_idx, actions)
-            done = (reward == 1 or reward == -0.25 or not self.check_boundary(agent_idx) or self.counter > self.max_time)
+            reward, end_time = self.compute_reward(agent_idx, actions)
+            if reward == 1:
+                done = 1
+            elif reward == -0.25:
+                done = 2
+            elif not self.check_boundary(agent_idx):
+                done = 3
+            elif self.counter > self.max_time:
+                done = 4
+            else:
+                done = False
             rewards.append(reward)
             done_signals.append(done)
-            stopping_times.append(stopping_time)
+            end_times.append(end_time)
 
         if rewards[0] == -0.25 or rewards[1] == -0.25:
             assert rewards[0] == rewards[1]
 
         for agent_idx in range(2):
-            self.agents[agent_idx].update_state(actions[agent_idx], stopping_times[agent_idx])
+            self.agents[agent_idx].update_state(actions[agent_idx], end_times[agent_idx])
             states.append(self.compute_joint_state(agent_idx))
         self.counter += 1
 

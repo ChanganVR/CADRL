@@ -149,14 +149,18 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained):
         states, rewards, done = env.step((action_sequences[0][-1], action_sequences[1][-1]))
         time_to_goal += 1
 
-    return time_to_goal, state_sequences
+    success = done[0] == 1 and done[1] == 1
+    if not success:
+        time_to_goal = 100
+
+    return time_to_goal, state_sequences, success
 
 
 def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs):
+    lr_scheduler.step()
     for epoch in range(num_epochs):
         epoch_loss = 0
         for data in data_loader:
-            lr_scheduler.step()
             inputs, values = data
             inputs = Variable(inputs)
             values = Variable(values)
@@ -168,7 +172,6 @@ def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_e
             loss.backward()
             optimizer.step()
             epoch_loss += loss.data.item()
-
         logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
 
 
@@ -192,11 +195,13 @@ def train(model, model_config, env_config):
     test_interval = model_config.getint('train', 'test_interval')
     test_episodes = model_config.getint('train', 'test_episodes')
     capacity = model_config.getint('train', 'capacity')
-    epsilon = model_config.getfloat('train', 'epsilon')
+    epsilon_start = model_config.getfloat('train', 'epsilon_start')
+    epsilon_end = model_config.getfloat('train', 'epsilon_end')
+    epsilon_decay = model_config.getfloat('train', 'epsilon_decay')
     num_epochs = model_config.getint('train', 'num_epochs')
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
 
-    criterion = nn.L1Loss()
+    criterion = nn.MSELoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
     memory = ReplayMemory(capacity)
@@ -204,25 +209,35 @@ def train(model, model_config, env_config):
     train_env = ENV(config=env_config)
     test_env = ENV(config=env_config)
 
-    for episode in range(train_episodes):
-        if episode % test_interval == 0:
-            test_time = []
-            for i in range(test_episodes):
-                time_to_goal, state_sequences = run_one_episode(model, 'test', test_env, gamma, epsilon, kinematic_constrained)
-                test_time.append(time_to_goal)
-            avg_time = sum(test_time) / len(test_time)
-            logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
-        time_to_goal, state_sequences = run_one_episode(model, 'train', train_env, gamma, epsilon, kinematic_constrained)
-        logging.info('Training in episode {} has {} unit time to goal'.format(episode, time_to_goal))
-        update_memory(memory, state_sequences, gamma)
-        optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
+    episode = 0
+    while episode < train_episodes:
+        # if episode % test_interval == 0:
+        #     test_time = []
+        #     for i in range(test_episodes):
+        #         time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
+        #                                                                  epsilon, kinematic_constrained)
+        #         test_time.append(time_to_goal)
+        #     avg_time = sum(test_time) / len(test_time)
+        #     logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
+
+        if episode < epsilon_decay:
+            epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
+        else:
+            epsilon = epsilon_end
+        time_to_goal, state_sequences, success = run_one_episode(model, 'train', train_env, gamma,
+                                                                 epsilon, kinematic_constrained)
+        if success:
+            logging.info('Training in episode {} has {} unit time to goal'.format(episode, time_to_goal))
+            update_memory(memory, state_sequences, gamma)
+            optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
+            episode += 1
 
     return model
 
 
 def main():
     parser = argparse.ArgumentParser('Parse configuration file')
-    parser.add_argument('file', type=str)
+    parser.add_argument('--file', type=str, default='configs/model.config')
     args = parser.parse_args()
     config_file = args.file
     model_config = configparser.RawConfigParser()
@@ -240,14 +255,15 @@ def main():
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
 
     # initialize model
-    initialized_model = initialize(model, model_config, env_config)
-    torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
-    logging.info('Finish initializing model. Model saved')
+    # initialized_model = initialize(model, model_config, env_config)
+    # torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
+    # logging.info('Finish initializing model. Model saved')
+    model.load_state_dict(torch.load('data/initialized_model.pth'))
 
     # train the model
-    # trained_model = train(model, model_config, env_config)
-    # torch.save(trained_model.state_dict(), 'data/initialized_model.pth')
-    # logging.info('Finish initializing model. Model saved')
+    trained_model = train(model, model_config, env_config)
+    torch.save(trained_model.state_dict(), 'data/trained_model.pth')
+    logging.info('Finish initializing model. Model saved')
 
 
 if __name__ == '__main__':
