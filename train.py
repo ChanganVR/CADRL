@@ -104,7 +104,6 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
                 state = None
             else:
                 state = states[agent_idx]
-                assert state is not None
                 v_neighbor_est = filter_velocity(state, state_sequences, agent_idx)
                 s_neighbor_est = propagate(ObservableState(*state[9:]), v_neighbor_est, kinematic_constrained)
 
@@ -132,11 +131,9 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
         states, rewards, done = env.step((action_sequences[0][-1], action_sequences[1][-1]))
         time_to_goal += 1
 
-    success = done[0] == 1 and done[1] == 1
-    if not success:
-        time_to_goal = 100
+    finished = (done[0] == 1 and done[1] == 1) or (done[0] == 2 and done[1] == 2)
 
-    return time_to_goal, state_sequences, success
+    return time_to_goal, state_sequences, finished
 
 
 def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs):
@@ -158,22 +155,28 @@ def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_e
         logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
 
 
-def find_values():
-    pass
-
-
 def update_memory(duplicate_model, memory, state_sequences):
     """
     Estimate state values and update the memory pool
 
     """
     for agent_idx in range(2):
-        state_sequence = state_sequences[agent_idx]
-        last_time_step = sum([state_sequence is not None])
-        for step in range(last_time_step):
-            state = state_sequence[step]
-            value = duplicate_model(torch.Tensor(state)).data.numpy()
-            memory.push((state, value))
+        state_sequence0 = state_sequences[agent_idx]
+        state_sequence1 = state_sequences[1-agent_idx]
+        tg0 = sum([state is not None for state in state_sequence0])
+        tg1 = sum([state is not None for state in state_sequence1])
+        for step in range(tg0):
+            state0 = state_sequence0[step]
+            value = duplicate_model(torch.Tensor(state0)).data.numpy()
+
+            # penalize aggressive behaviors
+            state1 = state_sequence1[step]
+            te0 = tg0-1-step - np.linalg.norm((state0.px-state0.pgx, state0.py-state1.pgy))/state0.v_pref
+            te1 = tg1-1-step - np.linalg.norm((state1.px-state0.pgx, state1.py-state1.pgy))/state1.v_pref
+            if te0 < 1 and te1 > 2**4:
+                value -= 0.1
+
+            memory.push((state0, value))
 
 
 def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
@@ -260,13 +263,13 @@ def train(model, memory, model_config, env_config):
     episode = 0
     while episode < train_episodes:
         if episode % test_interval == 0:
-            test_time = []
-            for i in range(test_episodes):
-                time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
-                                                                         None, kinematic_constrained)
-                test_time.append(time_to_goal)
-            avg_time = sum(test_time) / len(test_time)
-            logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
+            # test_time = []
+            # for i in range(test_episodes):
+            #     time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
+            #                                                              None, kinematic_constrained)
+            #     test_time.append(time_to_goal)
+            # avg_time = sum(test_time) / len(test_time)
+            # logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
 
             # update duplicate model
             duplicate_model = copy.deepcopy(model)
@@ -275,10 +278,11 @@ def train(model, memory, model_config, env_config):
             epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
         else:
             epsilon = epsilon_end
-        time_to_goal, state_sequences, success = run_one_episode(model, 'train', train_env, gamma,
-                                                                 epsilon, kinematic_constrained)
-        # TODO: what kind of episodes should be used to update the memory pool
-        if success:
+        time_to_goal, state_sequences, finished = run_one_episode(model, 'train', train_env, gamma,
+                                                                  epsilon, kinematic_constrained)
+
+        # update the memory if the episode runs to the end (reach the goal or collide)
+        if finished:
             logging.info('Training in episode {} has {} unit time to goal'.format(episode, time_to_goal))
             update_memory(duplicate_model, memory, state_sequences)
             optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
