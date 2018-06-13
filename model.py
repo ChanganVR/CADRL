@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-
 import numpy as np
 
 
@@ -42,18 +41,19 @@ class ValueNetwork(nn.Module):
         state = IndexTranslator(state.numpy())
         dx = state.pgx - state.px
         dy = state.pgy - state.py
-        rot = np.arctan2(state.pgx-state.px, state.pgy-state.py) + np.pi
+        rot = np.arctan2(state.pgy-state.py, state.pgx-state.px)
 
         dg = np.linalg.norm(np.concatenate([dx, dy], axis=1), axis=1, keepdims=True)
         v_pref = state.v_pref
         vx = state.vx * np.cos(rot) + state.vy * np.sin(rot)
         vy = state.vy * np.cos(rot) - state.vx * np.sin(rot)
         radius = state.radius
-        theta = state.theta - rot
-        vx1 = state.vx1 * np.cos(rot) + state.vy * np.sin(rot)
-        vy1 = state.vy1 * np.cos(rot) - state.vx * np.sin(rot)
-        px1 = (state.px1 + dx) * np.cos(rot) + (state.py1 + dy) * np.sin(rot)
-        py1 = (state.py1 + dy) * np.cos(rot) - (state.px1 + dx) * np.sin(rot)
+        # TODO: without kinematic constraint, simply keep theta as 0
+        theta = state.theta
+        vx1 = state.vx1 * np.cos(rot) + state.vy1 * np.sin(rot)
+        vy1 = state.vy1 * np.cos(rot) - state.vx1 * np.sin(rot)
+        px1 = (state.px1 - state.px) * np.cos(rot) + (state.py1 - state.py) * np.sin(rot)
+        py1 = (state.py1 - state.py) * np.cos(rot) - (state.px1 - state.px) * np.sin(rot)
         radius1 = state.radius1
         radius_sum = radius + radius1
         cos_theta = np.cos(theta)

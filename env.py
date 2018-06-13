@@ -1,14 +1,5 @@
-from collections import namedtuple
 import math
-
-
-FullState = namedtuple('FullState', ['px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta'])
-ObservableState = namedtuple('ObservableState', ['px', 'py', 'vx', 'vy', 'radius'])
-JointState = namedtuple('JointState', ['px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta',
-                                       'px1', 'py1', 'vx1', 'vy1', 'radius1'])
-Velocity = namedtuple('Velocity', ['x', 'y'])
-# v is velocity, under kinematic constraints, r is rotation angle otherwise it's speed direction
-Action = namedtuple('Action', ['v', 'r'])
+from utils import JointState
 
 
 class Agent(object):

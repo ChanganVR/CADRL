@@ -3,3 +3,4 @@ __pycache__/
 configs/ 
 data/
 *.log
+.pytest_cache/

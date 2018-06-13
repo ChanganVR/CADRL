@@ -2,38 +2,22 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+import copy
 import sys
 import logging
 import random
 import itertools
 import argparse
 import configparser
+import math
+import os
+import numpy as np
+import re
 from collections import defaultdict
 from model import ValueNetwork
-from env import *
-from initialize import initialize, compute_value
-
-
-class ReplayMemory(Dataset):
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.memory = [None] * self.capacity
-        self.position = 0
-
-    def push(self, item):
-        # replace old experience with new experience
-        self.memory[self.position] = item
-        self.position = (self.position + 1) % self.capacity
-
-    def is_full(self):
-        return len(self.memory) == self.capacity
-
-    def __getitem__(self, item):
-        return self.memory[item]
-
-    def __len__(self):
-        return sum([x is not None for x in self.memory])
+from env import ENV
+from utils import *
 
 
 def filter_velocity(joint_state, state_sequences, agent_idx):
@@ -85,18 +69,17 @@ def build_action_space(v_pref, kinematic_constrained):
     Action space consists of 25 precomputed actions and 10 randomly sampled actions.
 
     """
-    random.seed(0)
     if kinematic_constrained:
-        velocities = [i/5*v_pref for i in range(5)]
-        rotations = [i/5*math.pi/3 - math.pi/6 for i in range(5)]
+        velocities = [i/4*v_pref for i in range(5)]
+        rotations = [i/4*math.pi/3 - math.pi/6 for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
         for i in range(10):
             random_velocity = random.random() * v_pref
             random_rotation = random.random() * math.pi/3 - math.pi/6
             actions.append(Action(random_velocity, random_rotation))
     else:
-        velocities = [i/5*v_pref for i in range(5)]
-        rotations = [i/5*2*math.pi for i in range(5)]
+        velocities = [i/4*v_pref for i in range(5)]
+        rotations = [i/4*2*math.pi for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
         for i in range(25):
             random_velocity = random.random() * v_pref
@@ -106,7 +89,8 @@ def build_action_space(v_pref, kinematic_constrained):
     return actions
 
 
-def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained):
+def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, seed=0):
+    random.seed(seed)
     # observe and take action till the episode is finished
     states = env.reset()
     time_to_goal = 0
@@ -174,18 +158,84 @@ def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_e
         logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
 
 
-def update_memory(memory, state_sequences, gamma):
-    # generate state_value pairs and update the memory pool
+def find_values():
+    pass
+
+
+def update_memory(duplicate_model, memory, state_sequences):
+    """
+    Estimate state values and update the memory pool
+
+    """
     for agent_idx in range(2):
         state_sequence = state_sequences[agent_idx]
         last_time_step = sum([state_sequence is not None])
         for step in range(last_time_step):
             state = state_sequence[step]
-            value = compute_value(gamma, last_time_step - step + 1, state.v_pref)
+            value = duplicate_model(torch.Tensor(state)).data.numpy()
             memory.push((state, value))
 
 
-def train(model, model_config, env_config):
+def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
+    memory = ReplayMemory(capacity=capacity)
+    for traj_file in os.listdir(traj_dir):
+        # parse trajectory data to state-value pairs
+        with open(os.path.join(traj_dir, traj_file)) as fo:
+            lines = fo.readlines()
+            times = list()
+            positions = list()
+            for line in lines[2:]:
+                line = line.split()
+                times.append(float(line[0]))
+                position = [[float(x) for x in re.sub('[()]', '', po).split(',')] for po in line[1:]]
+                positions.append(position)
+            positions = np.array(positions)
+
+        trajectory1 = Trajectory(gamma, *[float(x) for x in lines[0].split()],
+                                 times, positions, kinematic_constrained)
+        trajectory2 = Trajectory(gamma, *[float(x) for x in lines[1].split()],
+                                 times, positions[:, ::-1, :], kinematic_constrained)
+        generated_pairs = trajectory1.generate_state_value_pairs() + trajectory2.generate_state_value_pairs()
+        for pair in generated_pairs:
+            memory.push(pair)
+
+    logging.info('Total number of state_value pairs: {}'.format(len(memory)))
+
+    return memory
+
+
+def initialize_model(model, memory, model_config):
+    num_epochs = model_config.getint('init', 'num_epochs')
+    batch_size = model_config.getint('train', 'batch_size')
+    learning_rate = model_config.getfloat('train', 'learning_rate')
+    step_size = model_config.getint('train', 'step_size')
+    data_loader = DataLoader(memory, batch_size, shuffle=True)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
+
+    for epoch in range(num_epochs):
+        epoch_loss = 0
+        lr_scheduler.step()
+        for data in data_loader:
+            inputs, values = data
+            inputs = Variable(inputs)
+            values = Variable(values)
+
+            optimizer.zero_grad()
+
+            outputs = model(inputs)
+            loss = criterion(outputs, values)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.data.item()
+
+        logging.info('Loss in epoch {}: {:.2f}'.format(epoch, epoch_loss))
+    return model
+
+
+def train(model, memory, model_config, env_config):
     gamma = model_config.getfloat('model', 'gamma')
     batch_size = model_config.getint('train', 'batch_size')
     learning_rate = model_config.getfloat('train', 'learning_rate')
@@ -193,7 +243,6 @@ def train(model, model_config, env_config):
     train_episodes = model_config.getint('train', 'train_episodes')
     test_interval = model_config.getint('train', 'test_interval')
     test_episodes = model_config.getint('train', 'test_episodes')
-    capacity = model_config.getint('train', 'capacity')
     epsilon_start = model_config.getfloat('train', 'epsilon_start')
     epsilon_end = model_config.getfloat('train', 'epsilon_end')
     epsilon_decay = model_config.getfloat('train', 'epsilon_decay')
@@ -203,21 +252,24 @@ def train(model, model_config, env_config):
     criterion = nn.MSELoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
-    memory = ReplayMemory(capacity)
     data_loader = DataLoader(memory, batch_size, shuffle=True)
     train_env = ENV(config=env_config)
     test_env = ENV(config=env_config)
+    duplicate_model = copy.deepcopy(model)
 
     episode = 0
     while episode < train_episodes:
-        # if episode % test_interval == 0:
-        #     test_time = []
-        #     for i in range(test_episodes):
-        #         time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
-        #                                                                  epsilon, kinematic_constrained)
-        #         test_time.append(time_to_goal)
-        #     avg_time = sum(test_time) / len(test_time)
-        #     logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
+        if episode % test_interval == 0:
+            test_time = []
+            for i in range(test_episodes):
+                time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
+                                                                         None, kinematic_constrained)
+                test_time.append(time_to_goal)
+            avg_time = sum(test_time) / len(test_time)
+            logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
+
+            # update duplicate model
+            duplicate_model = copy.deepcopy(model)
 
         if episode < epsilon_decay:
             epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
@@ -225,9 +277,10 @@ def train(model, model_config, env_config):
             epsilon = epsilon_end
         time_to_goal, state_sequences, success = run_one_episode(model, 'train', train_env, gamma,
                                                                  epsilon, kinematic_constrained)
+        # TODO: what kind of episodes should be used to update the memory pool
         if success:
             logging.info('Training in episode {} has {} unit time to goal'.format(episode, time_to_goal))
-            update_memory(memory, state_sequences, gamma)
+            update_memory(duplicate_model, memory, state_sequences)
             optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
             episode += 1
 
@@ -253,14 +306,21 @@ def main():
     model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
 
+    # load simulated data from ORCA
+    traj_dir = model_config.get('init', 'traj_dir')
+    gamma = model_config.getfloat('model', 'gamma')
+    kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
+    capacity = model_config.getint('train', 'capacity')
+    memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
+
     # initialize model
-    initialized_model = initialize(model, model_config, env_config)
+    initialized_model = initialize_model(model, memory, model_config)
     torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
     logging.info('Finish initializing model. Model saved')
     # model.load_state_dict(torch.load('data/initialized_model.pth'))
 
     # train the model
-    # trained_model = train(model, model_config, env_config)
+    # trained_model = train(model, memory, model_config, env_config)
     # torch.save(trained_model.state_dict(), 'data/trained_model.pth')
     # logging.info('Finish initializing model. Model saved')
 
