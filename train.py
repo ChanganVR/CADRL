@@ -14,6 +14,7 @@ import math
 import os
 import numpy as np
 import re
+import time
 from collections import defaultdict
 from model import ValueNetwork
 from env import ENV
@@ -57,7 +58,7 @@ def propagate(state, v_est, kinematic_constrained, delta_t=1):
             new_px = state.px + math.cos(v_est.r) * v_est.v * delta_t
             new_py = state.py + math.sin(v_est.r) * v_est.v * delta_t
             state = FullState(new_px, new_py, state.vx, state.vy, state.radius,
-                              state.pgx, state.pgy, state.v_pref, state.theta + v_est.r)
+                              state.pgx, state.pgy, state.v_pref, state.theta)
     else:
         raise ValueError('Type error')
 
@@ -78,34 +79,41 @@ def build_action_space(v_pref, kinematic_constrained):
             random_rotation = random.random() * math.pi/3 - math.pi/6
             actions.append(Action(random_velocity, random_rotation))
     else:
-        velocities = [i/4*v_pref for i in range(5)]
+        velocities = [(i+1)/5*v_pref for i in range(5)]
         rotations = [i/4*2*math.pi for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
         for i in range(25):
             random_velocity = random.random() * v_pref
             random_rotation = random.random() * 2 * math.pi
             actions.append(Action(random_velocity, random_rotation))
+        actions.append(Action(0, 0))
 
     return actions
 
 
-def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, seed=0):
-    random.seed(seed)
+def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, seed=None):
+    """
+    Run two agents simultaneously without communication
+
+    """
+    random.seed(time.time())
     # observe and take action till the episode is finished
     states = env.reset()
-    time_to_goal = 0
     state_sequences = defaultdict(list)
-    action_sequences = defaultdict(list)
+    state_sequences[0].append(states[0])
+    state_sequences[1].append(states[1])
+    times = [0, 0]
+    end_signals = [0, 0]
     done = [False, False]
     while not all(done):
+        actions = list()
         for agent_idx in range(2):
+            state = states[agent_idx]
             if done[agent_idx]:
                 action = Action(0, 0)
-                state = None
             else:
-                state = states[agent_idx]
-                v_neighbor_est = filter_velocity(state, state_sequences, agent_idx)
-                s_neighbor_est = propagate(ObservableState(*state[9:]), v_neighbor_est, kinematic_constrained)
+                v1_est = filter_velocity(state, state_sequences, agent_idx)
+                s1n_est = propagate(ObservableState(*state[9:]), v1_est, kinematic_constrained)
 
                 max_value = float('-inf')
                 best_action = None
@@ -117,23 +125,28 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
                 else:
                     for action in action_space:
                         reward, _ = env.compute_reward(agent_idx, [action, None])
-                        s_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
-                        model_input = torch.Tensor([s_est + s_neighbor_est])
-                        value = reward + pow(gamma, state.v_pref) * model(model_input).data.item()
+                        s0n_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
+                        s0n_est = torch.Tensor([s0n_est + s1n_est])
+                        value = reward + pow(gamma, state.v_pref) * model(s0n_est).data.item()
                         if value > max_value:
                             max_value = value
                             best_action = action
                     action = best_action
-            state_sequences[agent_idx].append(state)
-            action_sequences[agent_idx].append(action)
+            actions.append(action)
 
         # update t and receive new observations
-        states, rewards, done = env.step((action_sequences[0][-1], action_sequences[1][-1]))
-        time_to_goal += 1
+        last_done = done
+        states, rewards, done = env.step(actions)
+        for agent_idx in range(2):
+            if last_done[agent_idx]:
+                state_sequences[agent_idx].append(None)
+            else:
+                if done[agent_idx]:
+                    end_signals[agent_idx] = done[agent_idx]
+                state_sequences[agent_idx].append(states[agent_idx])
+                times[agent_idx] += 1
 
-    finished = (done[0] == 1 and done[1] == 1) or (done[0] == 2 and done[1] == 2)
-
-    return time_to_goal, state_sequences, finished
+    return times, state_sequences, end_signals
 
 
 def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs):
@@ -155,28 +168,27 @@ def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_e
         logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
 
 
-def update_memory(duplicate_model, memory, state_sequences):
+def update_memory(duplicate_model, memory, state_sequences, agent_idx):
     """
-    Estimate state values and update the memory pool
+    Estimate state values of finished episode and update the memory pool
 
     """
-    for agent_idx in range(2):
-        state_sequence0 = state_sequences[agent_idx]
-        state_sequence1 = state_sequences[1-agent_idx]
-        tg0 = sum([state is not None for state in state_sequence0])
-        tg1 = sum([state is not None for state in state_sequence1])
-        for step in range(tg0):
-            state0 = state_sequence0[step]
-            value = duplicate_model(torch.Tensor(state0)).data.numpy()
+    state_sequence0 = state_sequences[agent_idx]
+    state_sequence1 = state_sequences[1-agent_idx]
+    tg0 = sum([state is not None for state in state_sequence0])
+    tg1 = sum([state is not None for state in state_sequence1])
+    for step in range(tg0):
+        state0 = state_sequence0[step]
+        value = duplicate_model(torch.Tensor(state0)).data.numpy()
 
-            # penalize aggressive behaviors
-            state1 = state_sequence1[step]
-            te0 = tg0-1-step - np.linalg.norm((state0.px-state0.pgx, state0.py-state1.pgy))/state0.v_pref
-            te1 = tg1-1-step - np.linalg.norm((state1.px-state0.pgx, state1.py-state1.pgy))/state1.v_pref
-            if te0 < 1 and te1 > 2**4:
-                value -= 0.1
+        # penalize aggressive behaviors
+        state1 = state_sequence1[step]
+        te0 = tg0-1-step - np.linalg.norm((state0.px-state0.pgx, state0.py-state1.pgy))/state0.v_pref
+        te1 = tg1-1-step - np.linalg.norm((state1.px-state0.pgx, state1.py-state1.pgy))/state1.v_pref
+        if te0 < 1 and te1 > 2**4:
+            value -= 0.1
 
-            memory.push((state0, value))
+        memory.push((state0, value))
 
 
 def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
@@ -212,8 +224,8 @@ def initialize_model(model, memory, model_config):
     batch_size = model_config.getint('train', 'batch_size')
     learning_rate = model_config.getfloat('train', 'learning_rate')
     step_size = model_config.getint('train', 'step_size')
-    data_loader = DataLoader(memory, batch_size, shuffle=True)
 
+    data_loader = DataLoader(memory, batch_size, shuffle=True)
     criterion = nn.MSELoss()
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
@@ -278,15 +290,16 @@ def train(model, memory, model_config, env_config):
             epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
         else:
             epsilon = epsilon_end
-        time_to_goal, state_sequences, finished = run_one_episode(model, 'train', train_env, gamma,
-                                                                  epsilon, kinematic_constrained)
+        times, state_sequences, end_signals = run_one_episode(model, 'train', train_env, gamma,
+                                                              epsilon, kinematic_constrained, seed=None)
 
         # update the memory if the episode runs to the end (reach the goal or collide)
-        if finished:
-            logging.info('Training in episode {} has {} unit time to goal'.format(episode, time_to_goal))
-            update_memory(duplicate_model, memory, state_sequences)
-            optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
-            episode += 1
+        for agent_idx in range(2):
+            if end_signals[agent_idx] in [1, 2]:
+                logging.info('Agent {} in episode {} reaches goal in {}'.format(agent_idx, episode, times[agent_idx]))
+                update_memory(duplicate_model, memory, state_sequences, agent_idx)
+                optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
+                episode += 1
 
     return model
 

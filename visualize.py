@@ -35,18 +35,18 @@ def visualize(model_config, env_config, weight_path):
         counter.append(i)
         if state_sequences[0][i] is None:
             p0 = positions[-1][0]
-            c0 = 'r'
+            c0 = 'tab:red'
         else:
             p0 = (state_sequences[0][i].px, state_sequences[0][i].py)
-            c0 = 'b'
+            c0 = 'tab:blue'
         if state_sequences[1][i] is None:
             p1 = positions[-1][1]
-            c1 = 'r'
+            c1 = 'tab:red'
         else:
             p1 = (state_sequences[1][i].px, state_sequences[1][i].py)
-            c1 = 'b'
+            c1 = 'tab:gray'
         if i == len(state_sequences[0])-1:
-            c0 = c1 = 'r'
+            c0 = c1 = 'tab:red'
         positions.append([p0, p1])
         colors.append([c0, c1])
 
@@ -55,8 +55,8 @@ def visualize(model_config, env_config, weight_path):
     ax.set_ylim(ymin, ymax)
     ax.add_artist(plt.Circle((0, 0), crossing_radius, fill=False, edgecolor='g', lw=1))
     ax.add_artist(plt.Rectangle((bxmin, bymin), bxmax-bxmin, bymax-bymin, fill=False, linestyle='dashed', lw=1))
-    agent0 = plt.Circle(positions[0][0], radius, fill=True)
-    agent1 = plt.Circle(positions[0][1], radius, fill=True)
+    agent0 = plt.Circle(positions[0][0], radius, fill=True, color='b')
+    agent1 = plt.Circle(positions[0][1], radius, fill=True, color='c')
     text = plt.text(0, 8, 'Step: {}'.format(counter[0]), fontsize=12)
     ax.add_artist(agent0)
     ax.add_artist(agent1)

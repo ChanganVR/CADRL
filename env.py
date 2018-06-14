@@ -85,20 +85,20 @@ class ENV(object):
         When performing one-step lookahead, len(actions)==1, the position of the other agent is approximate
         When called by step(), len(actions)==2, the position of the other agent is exact
         """
-        agent = self.agents[agent_idx]
-        other_agent = self.agents[1-agent_idx]
+        agent0 = self.agents[agent_idx]
+        agent1 = self.agents[1-agent_idx]
         # simple collision detection is done by checking the beginning and end position
         dmin = float('inf')
         dmin_time = 1
         for time in [0, 0.5, 1]:
-            self_pos = agent.compute_position(time, actions[agent_idx])
-            other_pos = other_agent.compute_position(time, actions[1-agent_idx])
-            distance = math.sqrt((self_pos[0]-other_pos[0])**2+(self_pos[1]-other_pos[1])**2)
+            pos0 = agent0.compute_position(time, actions[agent_idx])
+            pos1 = agent1.compute_position(time, actions[1-agent_idx])
+            distance = math.sqrt((pos0[0]-pos1[0])**2 + (pos0[1]-pos1[1])**2)
             if distance < dmin:
                 dmin = distance
                 dmin_time = time
-        final_pos = agent.compute_position(1, actions[agent_idx])
-        reached_goal = math.sqrt((final_pos[0] - agent.pgx)**2 + (final_pos[1] - agent.pgy)**2) < self.radius
+        final_pos = agent0.compute_position(1, actions[agent_idx])
+        reached_goal = math.sqrt((final_pos[0] - agent0.pgx)**2 + (final_pos[1] - agent0.pgy)**2) < self.radius
 
         if dmin < self.radius * 2:
             reward = -0.25
