@@ -110,47 +110,45 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
         for agent_idx in range(2):
             state = states[agent_idx]
             if done[agent_idx]:
-                action = Action(0, 0)
-            else:
-                v1_est = filter_velocity(state, state_sequences, agent_idx)
-                s1n_est = propagate(ObservableState(*state[9:]), v1_est, kinematic_constrained)
+                # skip an agent which is done already
+                actions.append(Action(0, 0))
+                continue
 
-                max_value = float('-inf')
-                best_action = None
-                # pick action according to epsilon-greedy
-                probability = random.random()
-                action_space = build_action_space(state.v_pref, kinematic_constrained)
-                if phase == 'train' and probability < epsilon:
-                    action = random.choice(action_space)
-                else:
-                    for action in action_space:
-                        reward, _ = env.compute_reward(agent_idx, [action, None])
-                        s0n_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
-                        s0n_est = torch.Tensor([s0n_est + s1n_est])
-                        value = reward + pow(gamma, state.v_pref) * model(s0n_est).data.item()
-                        if value > max_value:
-                            max_value = value
-                            best_action = action
-                    action = best_action
-            actions.append(action)
+            other_v_est = filter_velocity(state, state_sequences, agent_idx)
+            other_sn_est = propagate(ObservableState(*state[9:]), other_v_est, kinematic_constrained)
+            max_value = float('-inf')
+            best_action = None
+            # pick action according to epsilon-greedy
+            probability = random.random()
+            action_space = build_action_space(state.v_pref, kinematic_constrained)
+            if phase == 'train' and probability < epsilon:
+                action = random.choice(action_space)
+            else:
+                for action in action_space:
+                    temp_actions = [None] * 2
+                    temp_actions[agent_idx] = action
+                    reward, _ = env.compute_reward(agent_idx, temp_actions)
+                    sn_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
+                    sn_est = torch.Tensor([sn_est + other_sn_est])
+                    value = reward + pow(gamma, state.v_pref) * model(sn_est).data.item()
+                    if value > max_value:
+                        max_value = value
+                        best_action = action
+                action = best_action
+                actions.append(action)
 
         # update t and receive new observations
-        last_done = done
         states, rewards, done = env.step(actions)
         for agent_idx in range(2):
-            if last_done[agent_idx]:
-                state_sequences[agent_idx].append(None)
-            else:
-                if done[agent_idx]:
-                    end_signals[agent_idx] = done[agent_idx]
-                state_sequences[agent_idx].append(states[agent_idx])
-                times[agent_idx] += 1
+            state_sequences[agent_idx].append(states[agent_idx])
+            times[agent_idx] += 1
 
     return times, state_sequences, end_signals
 
 
-def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs):
+def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs):
     lr_scheduler.step()
+    losses = []
     for epoch in range(num_epochs):
         epoch_loss = 0
         for data in data_loader:
@@ -165,7 +163,10 @@ def optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_e
             loss.backward()
             optimizer.step()
             epoch_loss += loss.data.item()
-        logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
+        # logging.info('Loss in epoch {} is {}'.format(epoch, epoch_loss))
+        losses.append(epoch_loss / data_size)
+    average_epoch_loss = sum(losses) / len(losses)
+    return average_epoch_loss
 
 
 def update_memory(duplicate_model, memory, state_sequences, agent_idx):
@@ -179,15 +180,23 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx):
     tg1 = sum([state is not None for state in state_sequence1])
     for step in range(tg0):
         state0 = state_sequence0[step]
-        value = duplicate_model(torch.Tensor(state0)).data.numpy()
+        value = duplicate_model(torch.Tensor([state0])).data.item()
 
         # penalize aggressive behaviors
         state1 = state_sequence1[step]
-        te0 = tg0-1-step - np.linalg.norm((state0.px-state0.pgx, state0.py-state1.pgy))/state0.v_pref
-        te1 = tg1-1-step - np.linalg.norm((state1.px-state0.pgx, state1.py-state1.pgy))/state1.v_pref
+        if state0 is None:
+            te0 = 0
+        else:
+            te0 = tg0-1-step - np.linalg.norm((state0.px-state0.pgx, state0.py-state0.pgy))/state0.v_pref
+        if state1 is None:
+            te1 = 0
+        else:
+            te1 = tg1-1-step - np.linalg.norm((state1.px-state1.pgx, state1.py-state1.pgy))/state1.v_pref
         if te0 < 1 and te1 > 2**4:
             value -= 0.1
 
+        state0 = torch.Tensor(state0)
+        value = torch.Tensor([value])
         memory.push((state0, value))
 
 
@@ -295,11 +304,17 @@ def train(model, memory, model_config, env_config):
 
         # update the memory if the episode runs to the end (reach the goal or collide)
         for agent_idx in range(2):
-            if end_signals[agent_idx] in [1, 2]:
-                logging.info('Agent {} in episode {} reaches goal in {}'.format(agent_idx, episode, times[agent_idx]))
-                update_memory(duplicate_model, memory, state_sequences, agent_idx)
-                optimize_batch(model, data_loader, optimizer, lr_scheduler, criterion, num_epochs)
-                episode += 1
+            if end_signals[agent_idx] in [0, 3, 4]:
+                logging.info('Failed episode')
+                continue
+            elif end_signals[agent_idx] == 1:
+                logging.info('Agent {} in episode {} reaches goal in {} steps'.format(agent_idx, episode, times[agent_idx]))
+            else:
+                logging.info('Agent {} in episode {} collides in {} steps'.format(agent_idx, episode, times[agent_idx]))
+            update_memory(duplicate_model, memory, state_sequences, agent_idx)
+            loss = optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
+            logging.info('Average loss in episode {}: {}'.format(episode, loss))
+            episode += 1
 
     return model
 
@@ -331,15 +346,15 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
 
     # initialize model
-    initialized_model = initialize_model(model, memory, model_config)
-    torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
-    logging.info('Finish initializing model. Model saved')
-    # model.load_state_dict(torch.load('data/initialized_model.pth'))
+    # initialized_model = initialize_model(model, memory, model_config)
+    # torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
+    # logging.info('Finish initializing model. Model saved')
+    model.load_state_dict(torch.load('data/initialized_model.pth'))
 
     # train the model
-    # trained_model = train(model, memory, model_config, env_config)
-    # torch.save(trained_model.state_dict(), 'data/trained_model.pth')
-    # logging.info('Finish initializing model. Model saved')
+    trained_model = train(model, memory, model_config, env_config)
+    torch.save(trained_model.state_dict(), 'data/trained_model.pth')
+    logging.info('Finish initializing model. Model saved')
 
 
 if __name__ == '__main__':

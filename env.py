@@ -1,5 +1,5 @@
 import math
-from utils import JointState
+from utils import JointState, Action
 
 
 class Agent(object):
@@ -14,6 +14,7 @@ class Agent(object):
         self.v_pref = v_pref
         self.theta = theta
         self.kinematic_constrained = kinematic_constrained
+        self.done = False
 
     def update_state(self, action, time):
         self.px, self.py = self.compute_position(time=time, action=action)
@@ -67,9 +68,11 @@ class ENV(object):
         self.counter = 0
 
     def compute_joint_state(self, agent_idx):
-        joint_states = JointState(*(self.agents[agent_idx].get_full_state() +
-                                    self.agents[1-agent_idx].get_observable_state()))
-        return joint_states
+        if self.agents[agent_idx].done:
+            return None
+        else:
+            return JointState(*(self.agents[agent_idx].get_full_state() +
+                              self.agents[1-agent_idx].get_observable_state()))
 
     def reset(self):
         # randomly initialize the agents' positions
@@ -82,23 +85,23 @@ class ENV(object):
 
     def compute_reward(self, agent_idx, actions):
         """
-        When performing one-step lookahead, len(actions)==1, the position of the other agent is approximate
-        When called by step(), len(actions)==2, the position of the other agent is exact
+        When performing one-step lookahead, only one action is known, the position of the other agent is approximate
+        When called by step(), both actions are known, the position of the other agent is exact
         """
-        agent0 = self.agents[agent_idx]
-        agent1 = self.agents[1-agent_idx]
+        agent = self.agents[agent_idx]
+        other_agent = self.agents[1-agent_idx]
         # simple collision detection is done by checking the beginning and end position
         dmin = float('inf')
         dmin_time = 1
         for time in [0, 0.5, 1]:
-            pos0 = agent0.compute_position(time, actions[agent_idx])
-            pos1 = agent1.compute_position(time, actions[1-agent_idx])
-            distance = math.sqrt((pos0[0]-pos1[0])**2 + (pos0[1]-pos1[1])**2)
+            pos = agent.compute_position(time, actions[agent_idx])
+            other_pos = other_agent.compute_position(time, actions[1-agent_idx])
+            distance = math.sqrt((pos[0]-other_pos[0])**2 + (pos[1]-other_pos[1])**2)
             if distance < dmin:
                 dmin = distance
                 dmin_time = time
-        final_pos = agent0.compute_position(1, actions[agent_idx])
-        reached_goal = math.sqrt((final_pos[0] - agent0.pgx)**2 + (final_pos[1] - agent0.pgy)**2) < self.radius
+        final_pos = agent.compute_position(1, actions[agent_idx])
+        reached_goal = math.sqrt((final_pos[0] - agent.pgx)**2 + (final_pos[1] - agent.pgy)**2) < self.radius
 
         if dmin < self.radius * 2:
             reward = -0.25
@@ -128,18 +131,7 @@ class ENV(object):
         end_times = []
         for agent_idx in range(self.agent_num):
             reward, end_time = self.compute_reward(agent_idx, actions)
-            if reward == 1:
-                done = 1
-            elif reward == -0.25:
-                done = 2
-            elif not self.check_boundary(agent_idx):
-                done = 3
-            elif self.counter > self.max_time:
-                done = 4
-            else:
-                done = False
             rewards.append(reward)
-            done_signals.append(done)
             end_times.append(end_time)
 
         # collision is mutual
@@ -149,6 +141,24 @@ class ENV(object):
         for agent_idx in range(2):
             self.agents[agent_idx].update_state(actions[agent_idx], end_times[agent_idx])
         states = [(self.compute_joint_state(agent_idx)) for agent_idx in range(2)]
+
+        for agent_idx in range(2):
+            agent = self.agents[agent_idx]
+            reward = rewards[agent_idx]
+            if not agent.done:
+                # only update agent's status if it's active
+                if reward == 1:
+                    agent.done = 1
+                elif reward == -0.25:
+                    agent.done = 2
+                elif not self.check_boundary(agent_idx):
+                    agent.done = 3
+                elif self.counter > self.max_time:
+                    agent.done = 4
+                else:
+                    agent.done = False
+            done_signals.append(agent.done)
+
         self.counter += 1
 
         return states, rewards, done_signals
