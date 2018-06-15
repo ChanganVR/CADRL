@@ -103,7 +103,6 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
     state_sequences[0].append(states[0])
     state_sequences[1].append(states[1])
     times = [0, 0]
-    end_signals = [0, 0]
     done = [False, False]
     while not all(done):
         actions = list()
@@ -135,7 +134,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
                         max_value = value
                         best_action = action
                 action = best_action
-                actions.append(action)
+            actions.append(action)
 
         # update t and receive new observations
         states, rewards, done = env.step(actions)
@@ -143,7 +142,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
             state_sequences[agent_idx].append(states[agent_idx])
             times[agent_idx] += 1
 
-    return times, state_sequences, end_signals
+    return times, state_sequences, done
 
 
 def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs):
@@ -265,6 +264,7 @@ def train(model, memory, model_config, env_config):
     learning_rate = model_config.getfloat('train', 'learning_rate')
     step_size = model_config.getint('train', 'step_size')
     train_episodes = model_config.getint('train', 'train_episodes')
+    sample_episodes = model_config.getint('train', 'sample_episodes')
     test_interval = model_config.getint('train', 'test_interval')
     test_episodes = model_config.getint('train', 'test_episodes')
     epsilon_start = model_config.getfloat('train', 'epsilon_start')
@@ -299,22 +299,26 @@ def train(model, memory, model_config, env_config):
             epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
         else:
             epsilon = epsilon_end
-        times, state_sequences, end_signals = run_one_episode(model, 'train', train_env, gamma,
-                                                              epsilon, kinematic_constrained, seed=None)
 
-        # update the memory if the episode runs to the end (reach the goal or collide)
-        for agent_idx in range(2):
-            if end_signals[agent_idx] in [0, 3, 4]:
-                logging.info('Failed episode')
-                continue
-            elif end_signals[agent_idx] == 1:
-                logging.info('Agent {} in episode {} reaches goal in {} steps'.format(agent_idx, episode, times[agent_idx]))
-            else:
-                logging.info('Agent {} in episode {} collides in {} steps'.format(agent_idx, episode, times[agent_idx]))
-            update_memory(duplicate_model, memory, state_sequences, agent_idx)
-            loss = optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
-            logging.info('Average loss in episode {}: {}'.format(episode, loss))
-            episode += 1
+        # define extra time to goal and 
+        etg = []
+        succ = 0
+        failure = 0
+        for _ in range(sample_episodes):
+            times, state_sequences, end_signals = run_one_episode(model, 'train', train_env, gamma,
+                                                                  epsilon, kinematic_constrained, seed=None)
+            # success is defined on the group's success
+            if end_signals[0] == 1 and end_signals[1] == 1:
+                succ += 1
+                etg.append(sum(times)/len(times)-4)
+            if end_signals[0] == 2 and end_signals[1] == 2:
+                failure += 1
+            update_memory(duplicate_model, memory, state_sequences, 0)
+            update_memory(duplicate_model, memory, state_sequences, 1)
+        loss = optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
+        logging.info('Episode {} has success rate: {:.2f}, failure rate: {:.2f}, time to goal: {:.0f}, and loss:{}'.
+                     format(episode, succ/sample_episodes, failure/sample_episodes, sum(etg)/len(etg), loss))
+        episode += 1
 
     return model
 
