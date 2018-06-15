@@ -14,6 +14,7 @@ import math
 import os
 import numpy as np
 import re
+import shutil
 import time
 from collections import defaultdict
 from model import ValueNetwork
@@ -274,8 +275,6 @@ def train(model, memory, model_config, env_config):
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
 
     criterion = nn.MSELoss()
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
     data_loader = DataLoader(memory, batch_size, shuffle=True)
     train_env = ENV(config=env_config)
     test_env = ENV(config=env_config)
@@ -300,7 +299,7 @@ def train(model, memory, model_config, env_config):
         else:
             epsilon = epsilon_end
 
-        # define extra time to goal and 
+        # define extra time to goal and all agents reaching goal as success
         etg = []
         succ = 0
         failure = 0
@@ -315,6 +314,10 @@ def train(model, memory, model_config, env_config):
                 failure += 1
             update_memory(duplicate_model, memory, state_sequences, 0)
             update_memory(duplicate_model, memory, state_sequences, 1)
+
+        # reinitialize optimizer and lr_scheduler in each new update
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
         loss = optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
         logging.info('Episode {} has success rate: {:.2f}, failure rate: {:.2f}, time to goal: {:.0f}, and loss:{}'.
                      format(episode, succ/sample_episodes, failure/sample_episodes, sum(etg)/len(etg), loss))
@@ -333,11 +336,23 @@ def main():
     env_config = configparser.RawConfigParser()
     env_config.read('configs/env.config')
 
-    file_handler = logging.FileHandler('output.log', mode='w')
+    # configure paths
+    output_dir = os.path.splitext(os.path.basename(args.file))[0]
+    output_dir = os.path.join('data', output_dir)
+    if os.path.exists(output_dir):
+        raise FileExistsError('Output folder already exists')
+    log_file = os.path.join(output_dir, 'output.log')
+    shutil.copy(args.file, output_dir)
+    initialized_weights = os.path.join(output_dir, 'initialized_model.pth')
+    trained_weights = os.path.join(output_dir, 'trained_model.pth')
+
+    # configure logging
+    file_handler = logging.FileHandler(log_file, mode='w')
     stdout_handler = logging.StreamHandler(sys.stdout)
     logging.basicConfig(level=logging.INFO, handlers=[stdout_handler, file_handler],
                         format='%(asctime)s, %(levelname)s: %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
 
+    # configure model
     state_dim = model_config.getint('model', 'state_dim')
     model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
@@ -350,14 +365,14 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
 
     # initialize model
-    # initialized_model = initialize_model(model, memory, model_config)
-    # torch.save(initialized_model.state_dict(), 'data/initialized_model.pth')
+    # initialize_model(model, memory, model_config)
+    # torch.save(model.state_dict(), initialized_weights)
     # logging.info('Finish initializing model. Model saved')
-    model.load_state_dict(torch.load('data/initialized_model.pth'))
+    model.load_state_dict(torch.load(initialized_weights))
 
     # train the model
-    trained_model = train(model, memory, model_config, env_config)
-    torch.save(trained_model.state_dict(), 'data/trained_model.pth')
+    train(model, memory, model_config, env_config)
+    torch.save(model.state_dict(), trained_weights)
     logging.info('Finish initializing model. Model saved')
 
 
