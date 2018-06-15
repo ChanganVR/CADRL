@@ -341,6 +341,8 @@ def main():
     output_dir = os.path.join('data', output_dir)
     if os.path.exists(output_dir):
         raise FileExistsError('Output folder already exists')
+    else:
+        os.mkdir(output_dir)
     log_file = os.path.join(output_dir, 'output.log')
     shutil.copy(args.file, output_dir)
     initialized_weights = os.path.join(output_dir, 'initialized_model.pth')
@@ -365,10 +367,10 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
 
     # initialize model
-    # initialize_model(model, memory, model_config)
-    # torch.save(model.state_dict(), initialized_weights)
-    # logging.info('Finish initializing model. Model saved')
-    model.load_state_dict(torch.load(initialized_weights))
+    initialize_model(model, memory, model_config)
+    torch.save(model.state_dict(), initialized_weights)
+    logging.info('Finish initializing model. Model saved')
+    # model.load_state_dict(torch.load(initialized_weights))
 
     # train the model
     train(model, memory, model_config, env_config)
