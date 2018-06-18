@@ -79,7 +79,7 @@ def main():
     parser.add_argument('--output_dir', type=str)
     args = parser.parse_args()
     config_file = os.path.join(args.output_dir, 'model.config')
-    weight_file = os.path.join(args.output_dir, 'trained_model.pth')
+    weight_file = os.path.join(args.output_dir, 'initialized_model.pth')
 
     model_config = configparser.RawConfigParser()
     model_config.read(config_file)

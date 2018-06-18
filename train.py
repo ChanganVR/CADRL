@@ -22,6 +22,9 @@ from env import ENV
 from utils import *
 
 
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+
+
 def filter_velocity(joint_state, state_sequences, agent_idx):
     """
     Compute the other agent's average velocity in last two time steps
@@ -97,7 +100,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
     Run two agents simultaneously without communication
 
     """
-    random.seed(time.time())
+    random.seed(seed)
     # observe and take action till the episode is finished
     states = env.reset()
     state_sequences = defaultdict(list)
@@ -129,7 +132,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
                     temp_actions[agent_idx] = action
                     reward, _ = env.compute_reward(agent_idx, temp_actions)
                     sn_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
-                    sn_est = torch.Tensor([sn_est + other_sn_est])
+                    sn_est = torch.Tensor([sn_est + other_sn_est]).to(device)
                     value = reward + pow(gamma, state.v_pref) * model(sn_est).data.item()
                     if value > max_value:
                         max_value = value
@@ -147,7 +150,8 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, se
 
 
 def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs):
-    lr_scheduler.step()
+    if lr_scheduler is not None:
+        lr_scheduler.step()
     losses = []
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -196,8 +200,8 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx):
             # TODO: explore different configurations
             value -= 0.1
 
-        state0 = torch.Tensor(state0)
-        value = torch.Tensor([value])
+        state0 = torch.Tensor(state0).to(device)
+        value = torch.Tensor([value]).to(device)
         memory.push((state0, value))
 
 
@@ -220,7 +224,7 @@ def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
                                  times, positions, kinematic_constrained)
         trajectory2 = Trajectory(gamma, *[float(x) for x in lines[1].split()],
                                  times, positions[:, ::-1, :], kinematic_constrained)
-        generated_pairs = trajectory1.generate_state_value_pairs() + trajectory2.generate_state_value_pairs()
+        generated_pairs = trajectory1.generate_state_value_pairs(device) + trajectory2.generate_state_value_pairs(device)
         for pair in generated_pairs:
             memory.push(pair)
 
@@ -236,7 +240,7 @@ def initialize_model(model, memory, model_config):
     step_size = model_config.getint('train', 'step_size')
 
     data_loader = DataLoader(memory, batch_size, shuffle=True)
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss().to(device)
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
 
@@ -260,7 +264,7 @@ def initialize_model(model, memory, model_config):
     return model
 
 
-def run_k_episodes(num_episodes,episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory):
+def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory):
     """
     Run k episodes and measure the average time to goal, access rate and failure rate
 
@@ -268,13 +272,13 @@ def run_k_episodes(num_episodes,episode, model, phase, env, gamma, epsilon, kine
     etg = []
     succ = 0
     failure = 0
-    if phase == 'test':
-        seed = 0
-    else:
-        seed = time.time()
+    # if phase == 'test':
+    #     seed = 0
+    # else:
+    #     seed = time.time()
     for _ in range(num_episodes):
         times, state_sequences, end_signals = run_one_episode(model, phase, env, gamma,
-                                                              epsilon, kinematic_constrained, seed=seed)
+                                                              epsilon, kinematic_constrained)
         # success is defined on the group's success
         if end_signals[0] == 1 and end_signals[1] == 1:
             succ += 1
@@ -285,8 +289,12 @@ def run_k_episodes(num_episodes,episode, model, phase, env, gamma, epsilon, kine
             update_memory(duplicate_model, memory, state_sequences, 0)
             update_memory(duplicate_model, memory, state_sequences, 1)
 
-    logging.info('{} in episode {} has success rate: {:.2f}, failure rate: {:.2f}, time to goal: {:.0f}'.
-                 format(phase, episode, succ / num_episodes, failure / num_episodes, sum(etg) / len(etg))
+    if len(etg) == 0:
+        average_time = 0
+    else:
+        average_time = sum(etg) / len(etg)
+    logging.info('{} in episode {} has success rate: {:.2f}, failure rate: {:.2f}, average extra time to goal: {:.0f}'.
+                 format(phase, episode, succ / num_episodes, failure / num_episodes, average_time))
 
     return etg, succ, failure
 
@@ -306,8 +314,10 @@ def train(model, memory, model_config, env_config):
     num_epochs = model_config.getint('train', 'num_epochs')
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
 
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss().to(device)
     data_loader = DataLoader(memory, batch_size, shuffle=True)
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
     train_env = ENV(config=env_config)
     test_env = ENV(config=env_config)
     duplicate_model = copy.deepcopy(model)
@@ -327,13 +337,10 @@ def train(model, memory, model_config, env_config):
             # update duplicate model
             duplicate_model = copy.deepcopy(model)
 
-        # train
+        # sample k episodes into memory and optimize over the generated memory
         run_k_episodes(sample_episodes, episode, model, 'train', train_env, gamma, epsilon,
                        kinematic_constrained, duplicate_model, memory)
-        # reinitialize optimizer and lr_scheduler in each new update
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
-        lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
-        optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
+        optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs)
         episode += 1
 
     return model
@@ -368,9 +375,12 @@ def main():
     logging.basicConfig(level=logging.INFO, handlers=[stdout_handler, file_handler],
                         format='%(asctime)s, %(levelname)s: %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
 
+    # configure device
+    logging.info('Device: {}'.format(device))
+
     # configure model
     state_dim = model_config.getint('model', 'state_dim')
-    model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
+    model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100]).to(device)
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
 
     # load simulated data from ORCA

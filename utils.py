@@ -51,7 +51,7 @@ class Trajectory(object):
     def compute_value(gamma, time_to_goal, v_pref):
         return pow(gamma, time_to_goal * v_pref)
 
-    def generate_state_value_pairs(self):
+    def generate_state_value_pairs(self, device):
         positions = self.positions
         steps = positions.shape[0]
         pairs = list()
@@ -79,8 +79,8 @@ class Trajectory(object):
             vy1 = pos1[1] - prev_pos1[1]
             r1 = self.radius
 
-            state = torch.Tensor((px, py, vx, vy, r, pgx, pgy, v_pref, theta, px1, py1, vx1, vy1, r1))
-            value = torch.Tensor([self.compute_value(self.gamma, (self.times[-1] - self.times[idx]), self.v_pref)])
+            state = torch.Tensor((px, py, vx, vy, r, pgx, pgy, v_pref, theta, px1, py1, vx1, vy1, r1)).to(device)
+            value = torch.Tensor([self.compute_value(self.gamma, (self.times[-1] - self.times[idx]), self.v_pref)]).to(device)
             # value = torch.Tensor([1000])
             pairs.append((state, value))
         return pairs
