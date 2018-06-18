@@ -296,7 +296,7 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     return etg, succ, failure
 
 
-def train(model, memory, model_config, env_config, device):
+def train(model, memory, model_config, env_config, device, weight_file):
     gamma = model_config.getfloat('model', 'gamma')
     batch_size = model_config.getint('train', 'batch_size')
     learning_rate = model_config.getfloat('train', 'learning_rate')
@@ -310,6 +310,7 @@ def train(model, memory, model_config, env_config, device):
     epsilon_decay = model_config.getfloat('train', 'epsilon_decay')
     num_epochs = model_config.getint('train', 'num_epochs')
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
+    checkpoint_interval = model_config.getint('train', 'checkpoint_interval')
 
     criterion = nn.MSELoss().to(device)
     data_loader = DataLoader(memory, batch_size, shuffle=True)
@@ -339,6 +340,10 @@ def train(model, memory, model_config, env_config, device):
                        kinematic_constrained, duplicate_model, memory, device)
         optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs, device)
         episode += 1
+
+        if episode != 0 and episode % checkpoint_interval == 0:
+            torch.save(model.state_dict(), weight_file)
+
 
     return model
 
@@ -399,7 +404,7 @@ def main():
         logging.info('Finish initializing model. Model saved')
 
     # train the model
-    train(model, memory, model_config, env_config, device)
+    train(model, memory, model_config, env_config, device, trained_weights)
     torch.save(model.state_dict(), trained_weights)
     logging.info('Finish initializing model. Model saved')
 
