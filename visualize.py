@@ -24,10 +24,11 @@ def visualize(model_config, env_config, weight_path):
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
     radius = env_config.getfloat('agent', 'radius')
 
+    device = torch.device('cpu')
     test_env = ENV(config=env_config)
     model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
-    model.load_state_dict(torch.load(weight_path))
-    _, state_sequences, _ = run_one_episode(model, 'test', test_env, gamma, None, kinematic_constrained)
+    model.load_state_dict(torch.load(weight_path, map_location=lambda storage, loc: storage))
+    _, state_sequences, _ = run_one_episode(model, 'test', test_env, gamma, None, kinematic_constrained, device)
 
     positions = list()
     colors = list()
@@ -77,9 +78,13 @@ def visualize(model_config, env_config, weight_path):
 def main():
     parser = argparse.ArgumentParser('Parse configuration file')
     parser.add_argument('--output_dir', type=str)
+    parser.add_argument('--init', default=False, action='store_true')
     args = parser.parse_args()
     config_file = os.path.join(args.output_dir, 'model.config')
-    weight_file = os.path.join(args.output_dir, 'initialized_model.pth')
+    if args.init:
+        weight_file = os.path.join(args.output_dir, 'initialized_model.pth')
+    else:
+        weight_file = os.path.join(args.output_dir, 'trained_model.pth')
 
     model_config = configparser.RawConfigParser()
     model_config.read(config_file)
