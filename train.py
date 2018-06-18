@@ -260,6 +260,37 @@ def initialize_model(model, memory, model_config):
     return model
 
 
+def run_k_episodes(num_episodes,episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory):
+    """
+    Run k episodes and measure the average time to goal, access rate and failure rate
+
+    """
+    etg = []
+    succ = 0
+    failure = 0
+    if phase == 'test':
+        seed = 0
+    else:
+        seed = time.time()
+    for _ in range(num_episodes):
+        times, state_sequences, end_signals = run_one_episode(model, phase, env, gamma,
+                                                              epsilon, kinematic_constrained, seed=seed)
+        # success is defined on the group's success
+        if end_signals[0] == 1 and end_signals[1] == 1:
+            succ += 1
+            etg.append(sum(times) / len(times) - 4)
+        if end_signals[0] == 2 and end_signals[1] == 2:
+            failure += 1
+        if duplicate_model is not None and memory is not None:
+            update_memory(duplicate_model, memory, state_sequences, 0)
+            update_memory(duplicate_model, memory, state_sequences, 1)
+
+    logging.info('{} in episode {} has success rate: {:.2f}, failure rate: {:.2f}, time to goal: {:.0f}'.
+                 format(phase, episode, succ / num_episodes, failure / num_episodes, sum(etg) / len(etg))
+
+    return etg, succ, failure
+
+
 def train(model, memory, model_config, env_config):
     gamma = model_config.getfloat('model', 'gamma')
     batch_size = model_config.getint('train', 'batch_size')
@@ -283,45 +314,26 @@ def train(model, memory, model_config, env_config):
 
     episode = 0
     while episode < train_episodes:
-        if episode % test_interval == 0:
-            # test_time = []
-            # for i in range(test_episodes):
-            #     time_to_goal, state_sequences, success = run_one_episode(model, 'test', test_env, gamma,
-            #                                                              None, kinematic_constrained)
-            #     test_time.append(time_to_goal)
-            # avg_time = sum(test_time) / len(test_time)
-            # logging.info('Testing in episode {} has average {} unit time to goal'.format(episode, avg_time))
-
-            # update duplicate model
-            duplicate_model = copy.deepcopy(model)
-
+        # epsilon-greedy
         if episode < epsilon_decay:
             epsilon = epsilon_start + (epsilon_end - epsilon_start) / epsilon_decay * episode
         else:
             epsilon = epsilon_end
 
-        # define extra time to goal and all agents reaching goal as success
-        etg = []
-        succ = 0
-        failure = 0
-        for _ in range(sample_episodes):
-            times, state_sequences, end_signals = run_one_episode(model, 'train', train_env, gamma,
-                                                                  epsilon, kinematic_constrained, seed=None)
-            # success is defined on the group's success
-            if end_signals[0] == 1 and end_signals[1] == 1:
-                succ += 1
-                etg.append(sum(times)/len(times)-4)
-            if end_signals[0] == 2 and end_signals[1] == 2:
-                failure += 1
-            update_memory(duplicate_model, memory, state_sequences, 0)
-            update_memory(duplicate_model, memory, state_sequences, 1)
+        # test
+        if episode % test_interval == 0:
+            run_k_episodes(test_episodes, episode, model, 'test', test_env, gamma, epsilon,
+                           kinematic_constrained, None, None)
+            # update duplicate model
+            duplicate_model = copy.deepcopy(model)
 
+        # train
+        run_k_episodes(sample_episodes, episode, model, 'train', train_env, gamma, epsilon,
+                       kinematic_constrained, duplicate_model, memory)
         # reinitialize optimizer and lr_scheduler in each new update
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
         lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
-        loss = optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
-        logging.info('Episode {} has success rate: {:.2f}, failure rate: {:.2f}, time to goal: {:.0f}, and loss:{}'.
-                     format(episode, succ/sample_episodes, failure/sample_episodes, sum(etg)/len(etg), loss))
+        optimize_batch(model, data_loader, len(memory), optimizer, lr_scheduler, criterion, num_epochs)
         episode += 1
 
     return model
@@ -340,10 +352,11 @@ def main():
     # configure paths
     output_dir = os.path.splitext(os.path.basename(args.config))[0]
     output_dir = os.path.join('data', output_dir)
-    # if os.path.exists(output_dir):
-    #     raise FileExistsError('Output folder already exists')
-    # else:
-    #     os.mkdir(output_dir)
+    if os.path.exists(output_dir):
+        # raise FileExistsError('Output folder already exists')
+        pass
+    else:
+        os.mkdir(output_dir)
     log_file = os.path.join(output_dir, 'output.log')
     shutil.copy(args.config, output_dir)
     initialized_weights = os.path.join(output_dir, 'initialized_model.pth')
@@ -368,10 +381,10 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
 
     # initialize model
-    # initialize_model(model, memory, model_config)
-    # torch.save(model.state_dict(), initialized_weights)
-    # logging.info('Finish initializing model. Model saved')
-    model.load_state_dict(torch.load(initialized_weights))
+    initialize_model(model, memory, model_config)
+    torch.save(model.state_dict(), initialized_weights)
+    logging.info('Finish initializing model. Model saved')
+    # model.load_state_dict(torch.load(initialized_weights))
 
     # train the model
     train(model, memory, model_config, env_config)
