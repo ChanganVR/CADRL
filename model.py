@@ -38,7 +38,7 @@ class ValueNetwork(nn.Module):
         # first translate the coordinate then rotate around the origin
         # 'px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta', 'px1', 'py1', 'vx1', 'vy1', 'radius1'
         #  0     1      2     3      4        5     6         7        8       9      10     11    12       13
-        state = IndexTranslator(state.numpy())
+        state = IndexTranslator(state.cpu().numpy())
         dx = state.pgx - state.px
         dy = state.pgy - state.py
         rot = np.arctan2(state.pgy-state.py, state.pgx-state.px)

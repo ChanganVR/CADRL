@@ -22,9 +22,6 @@ from env import ENV
 from utils import *
 
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-
-
 def filter_velocity(joint_state, state_sequences, agent_idx):
     """
     Compute the other agent's average velocity in last two time steps
@@ -95,7 +92,7 @@ def build_action_space(v_pref, kinematic_constrained):
     return actions
 
 
-def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, seed=None):
+def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, device, seed=None):
     """
     Run two agents simultaneously without communication
 
@@ -173,7 +170,7 @@ def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, crite
     return average_epoch_loss
 
 
-def update_memory(duplicate_model, memory, state_sequences, agent_idx):
+def update_memory(duplicate_model, memory, state_sequences, agent_idx, device):
     """
     Estimate state values of finished episode and update the memory pool
 
@@ -205,7 +202,7 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx):
         memory.push((state0, value))
 
 
-def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
+def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device):
     memory = ReplayMemory(capacity=capacity)
     for traj_file in os.listdir(traj_dir):
         # parse trajectory data to state-value pairs
@@ -233,7 +230,7 @@ def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained):
     return memory
 
 
-def initialize_model(model, memory, model_config):
+def initialize_model(model, memory, model_config, device):
     num_epochs = model_config.getint('init', 'num_epochs')
     batch_size = model_config.getint('train', 'batch_size')
     learning_rate = model_config.getfloat('train', 'learning_rate')
@@ -264,7 +261,7 @@ def initialize_model(model, memory, model_config):
     return model
 
 
-def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory):
+def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory, device):
     """
     Run k episodes and measure the average time to goal, access rate and failure rate
 
@@ -299,7 +296,7 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     return etg, succ, failure
 
 
-def train(model, memory, model_config, env_config):
+def train(model, memory, model_config, env_config, device):
     gamma = model_config.getfloat('model', 'gamma')
     batch_size = model_config.getint('train', 'batch_size')
     learning_rate = model_config.getfloat('train', 'learning_rate')
@@ -339,7 +336,7 @@ def train(model, memory, model_config, env_config):
 
         # sample k episodes into memory and optimize over the generated memory
         run_k_episodes(sample_episodes, episode, model, 'train', train_env, gamma, epsilon,
-                       kinematic_constrained, duplicate_model, memory)
+                       kinematic_constrained, duplicate_model, memory, device)
         optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs)
         episode += 1
 
@@ -349,6 +346,7 @@ def train(model, memory, model_config, env_config):
 def main():
     parser = argparse.ArgumentParser('Parse configuration file')
     parser.add_argument('--config', type=str, default='configs/model.config')
+    parser.add_argument('--gpu', default=False, action='store_true')
     args = parser.parse_args()
     config_file = args.config
     model_config = configparser.RawConfigParser()
@@ -376,6 +374,7 @@ def main():
                         format='%(asctime)s, %(levelname)s: %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
 
     # configure device
+    device = torch.device("cuda:0" if torch.cuda.is_available() and args.gpu else "cpu")
     logging.info('Device: {}'.format(device))
 
     # configure model
@@ -388,16 +387,16 @@ def main():
     gamma = model_config.getfloat('model', 'gamma')
     kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
     capacity = model_config.getint('train', 'capacity')
-    memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
+    memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device)
 
     # initialize model
-    initialize_model(model, memory, model_config)
+    initialize_model(model, memory, model_config, device)
     torch.save(model.state_dict(), initialized_weights)
     logging.info('Finish initializing model. Model saved')
     # model.load_state_dict(torch.load(initialized_weights))
 
     # train the model
-    train(model, memory, model_config, env_config)
+    train(model, memory, model_config, env_config, device)
     torch.save(model.state_dict(), trained_weights)
     logging.info('Finish initializing model. Model saved')
 
