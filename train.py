@@ -130,7 +130,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, de
                     reward, _ = env.compute_reward(agent_idx, temp_actions)
                     sn_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
                     sn_est = torch.Tensor([sn_est + other_sn_est]).to(device)
-                    value = reward + pow(gamma, state.v_pref) * model(sn_est).data.item()
+                    value = reward + pow(gamma, state.v_pref) * model(sn_est, device).data.item()
                     if value > max_value:
                         max_value = value
                         best_action = action
@@ -146,7 +146,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, de
     return times, state_sequences, done
 
 
-def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs):
+def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs, device):
     if lr_scheduler is not None:
         lr_scheduler.step()
     losses = []
@@ -159,7 +159,7 @@ def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, crite
 
             optimizer.zero_grad()
 
-            outputs = model(inputs)
+            outputs = model(inputs, device)
             loss = criterion(outputs, values)
             loss.backward()
             optimizer.step()
@@ -181,7 +181,7 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx, device):
     tg1 = sum([state is not None for state in state_sequence1])
     for step in range(tg0):
         state0 = state_sequence0[step]
-        value = duplicate_model(torch.Tensor([state0])).data.item()
+        value = duplicate_model(torch.Tensor([state0]), device).data.item()
 
         # penalize non-cooperating behaviors
         state1 = state_sequence1[step]
@@ -251,7 +251,7 @@ def initialize_model(model, memory, model_config, device):
 
             optimizer.zero_grad()
 
-            outputs = model(inputs)
+            outputs = model(inputs, device)
             loss = criterion(outputs, values)
             loss.backward()
             optimizer.step()
@@ -337,7 +337,7 @@ def train(model, memory, model_config, env_config, device):
         # sample k episodes into memory and optimize over the generated memory
         run_k_episodes(sample_episodes, episode, model, 'train', train_env, gamma, epsilon,
                        kinematic_constrained, duplicate_model, memory, device)
-        optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs)
+        optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs, device)
         episode += 1
 
     return model

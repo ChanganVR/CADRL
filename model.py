@@ -34,7 +34,7 @@ class ValueNetwork(nn.Module):
                                            nn.Linear(fc_layers[2], 1))
 
     @staticmethod
-    def rotate(state):
+    def rotate(state, device):
         # first translate the coordinate then rotate around the origin
         # 'px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta', 'px1', 'py1', 'vx1', 'vy1', 'radius1'
         #  0     1      2     3      4        5     6         7        8       9      10     11    12       13
@@ -62,11 +62,11 @@ class ValueNetwork(nn.Module):
 
         new_state = np.concatenate([dg, v_pref, vx, vy, radius, theta, vx1, vy1, px1, py1,
                                     radius1, radius_sum, cos_theta, sin_theta, da], axis=1)
-        return torch.Tensor(new_state)
+        return torch.Tensor(new_state).to(device)
 
-    def forward(self, state):
+    def forward(self, state, device):
         if self.reparametrization:
-            state = self.rotate(state)
+            state = self.rotate(state, device)
         value = self.value_network(state)
         return value
 
