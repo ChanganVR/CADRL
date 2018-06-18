@@ -1,6 +1,7 @@
 import argparse
 import configparser
 import torch
+import os
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from model import ValueNetwork
@@ -75,16 +76,17 @@ def visualize(model_config, env_config, weight_path):
 
 def main():
     parser = argparse.ArgumentParser('Parse configuration file')
-    parser.add_argument('--file', type=str, default='configs/model.config')
-    parser.add_argument('--weight_path', type=str, default='data/initialized_model.pth')
+    parser.add_argument('--output_dir', type=str)
     args = parser.parse_args()
-    config_file = args.file
+    config_file = os.path.join(args.output_dir, 'model.config')
+    weight_file = os.path.join(args.output_dir, 'trained_model.pth')
+
     model_config = configparser.RawConfigParser()
     model_config.read(config_file)
     env_config = configparser.RawConfigParser()
     env_config.read('configs/env.config')
 
-    visualize(model_config, env_config, args.weight_path)
+    visualize(model_config, env_config, weight_file)
 
 
 if __name__ == '__main__':

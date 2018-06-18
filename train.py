@@ -182,7 +182,7 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx):
         state0 = state_sequence0[step]
         value = duplicate_model(torch.Tensor([state0])).data.item()
 
-        # penalize aggressive behaviors
+        # penalize non-cooperating behaviors
         state1 = state_sequence1[step]
         if state0 is None:
             te0 = 0
@@ -192,7 +192,8 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx):
             te1 = 0
         else:
             te1 = tg1-1-step - np.linalg.norm((state1.px-state1.pgx, state1.py-state1.pgy))/state1.v_pref
-        if te0 < 1 and te1 > 2**4:
+        if te0 < 1 and te1 > 6:
+            # TODO: explore different configurations
             value -= 0.1
 
         state0 = torch.Tensor(state0)
@@ -328,23 +329,23 @@ def train(model, memory, model_config, env_config):
 
 def main():
     parser = argparse.ArgumentParser('Parse configuration file')
-    parser.add_argument('--file', type=str, default='configs/model.config')
+    parser.add_argument('--config', type=str, default='configs/model.config')
     args = parser.parse_args()
-    config_file = args.file
+    config_file = args.config
     model_config = configparser.RawConfigParser()
     model_config.read(config_file)
     env_config = configparser.RawConfigParser()
     env_config.read('configs/env.config')
 
     # configure paths
-    output_dir = os.path.splitext(os.path.basename(args.file))[0]
+    output_dir = os.path.splitext(os.path.basename(args.config))[0]
     output_dir = os.path.join('data', output_dir)
-    if os.path.exists(output_dir):
-        raise FileExistsError('Output folder already exists')
-    else:
-        os.mkdir(output_dir)
+    # if os.path.exists(output_dir):
+    #     raise FileExistsError('Output folder already exists')
+    # else:
+    #     os.mkdir(output_dir)
     log_file = os.path.join(output_dir, 'output.log')
-    shutil.copy(args.file, output_dir)
+    shutil.copy(args.config, output_dir)
     initialized_weights = os.path.join(output_dir, 'initialized_model.pth')
     trained_weights = os.path.join(output_dir, 'trained_model.pth')
 
@@ -367,10 +368,10 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained)
 
     # initialize model
-    initialize_model(model, memory, model_config)
-    torch.save(model.state_dict(), initialized_weights)
-    logging.info('Finish initializing model. Model saved')
-    # model.load_state_dict(torch.load(initialized_weights))
+    # initialize_model(model, memory, model_config)
+    # torch.save(model.state_dict(), initialized_weights)
+    # logging.info('Finish initializing model. Model saved')
+    model.load_state_dict(torch.load(initialized_weights))
 
     # train the model
     train(model, memory, model_config, env_config)
