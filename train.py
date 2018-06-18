@@ -275,7 +275,7 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     #     seed = time.time()
     for _ in range(num_episodes):
         times, state_sequences, end_signals = run_one_episode(model, phase, env, gamma,
-                                                              epsilon, kinematic_constrained)
+                                                              epsilon, kinematic_constrained, device)
         # success is defined on the group's success
         if end_signals[0] == 1 and end_signals[1] == 1:
             succ += 1
@@ -283,8 +283,8 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
         if end_signals[0] == 2 and end_signals[1] == 2:
             failure += 1
         if duplicate_model is not None and memory is not None:
-            update_memory(duplicate_model, memory, state_sequences, 0)
-            update_memory(duplicate_model, memory, state_sequences, 1)
+            update_memory(duplicate_model, memory, state_sequences, 0, device)
+            update_memory(duplicate_model, memory, state_sequences, 1, device)
 
     if len(etg) == 0:
         average_time = 0
@@ -330,7 +330,7 @@ def train(model, memory, model_config, env_config, device):
         # test
         if episode % test_interval == 0:
             run_k_episodes(test_episodes, episode, model, 'test', test_env, gamma, epsilon,
-                           kinematic_constrained, None, None)
+                           kinematic_constrained, None, None, device)
             # update duplicate model
             duplicate_model = copy.deepcopy(model)
 
@@ -359,7 +359,7 @@ def main():
     output_dir = os.path.join('data', output_dir)
     if os.path.exists(output_dir):
         # raise FileExistsError('Output folder already exists')
-        pass
+        print('Output folder already exists')
     else:
         os.mkdir(output_dir)
     log_file = os.path.join(output_dir, 'output.log')
@@ -375,7 +375,7 @@ def main():
 
     # configure device
     device = torch.device("cuda:0" if torch.cuda.is_available() and args.gpu else "cpu")
-    logging.info('Device: {}'.format(device))
+    logging.info('Using device: {}'.format(device))
 
     # configure model
     state_dim = model_config.getint('model', 'state_dim')
@@ -390,10 +390,13 @@ def main():
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device)
 
     # initialize model
-    initialize_model(model, memory, model_config, device)
-    torch.save(model.state_dict(), initialized_weights)
-    logging.info('Finish initializing model. Model saved')
-    # model.load_state_dict(torch.load(initialized_weights))
+    if os.path.exists(initialized_weights):
+        model.load_state_dict(torch.load(initialized_weights))
+        logging.info('Load initialized model weights')
+    else:
+        initialize_model(model, memory, model_config, device)
+        torch.save(model.state_dict(), initialized_weights)
+        logging.info('Finish initializing model. Model saved')
 
     # train the model
     train(model, memory, model_config, env_config, device)
