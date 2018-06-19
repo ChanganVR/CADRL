@@ -184,11 +184,12 @@ def update_memory(duplicate_model, memory, state_sequences, reward_sequences, ga
     state_sequence1 = state_sequences[1-agent_idx]
     tg0 = sum([state is not None for state in state_sequence0])
     tg1 = sum([state is not None for state in state_sequence1])
-    for step in range(tg0):
+    for step in range(tg0-1):
         state0 = state_sequence0[step]
+        next_state0 = state_sequence0[step+1]
         reward0 = reward_sequence0[step]
         # approximate the value with TD prediction based on the next state
-        value = reward0 + gamma * duplicate_model(torch.Tensor([state0]), device).data.item()
+        value = reward0 + gamma * duplicate_model(torch.Tensor([next_state0]), device).data.item()
 
         # penalize non-cooperating behaviors
         state1 = state_sequence1[step]
