@@ -30,7 +30,7 @@ def visualize(model_config, env_config, weight_path):
         test_env.reset()
     model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
     model.load_state_dict(torch.load(weight_path, map_location=lambda storage, loc: storage))
-    _, state_sequences, _ = run_one_episode(model, 'test', test_env, gamma, None, kinematic, device)
+    _, state_sequences, _, _ = run_one_episode(model, 'test', test_env, gamma, None, kinematic, device)
 
     positions = list()
     colors = list()

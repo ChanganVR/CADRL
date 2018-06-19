@@ -103,6 +103,9 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic, device, seed=N
     state_sequences = defaultdict(list)
     state_sequences[0].append(states[0])
     state_sequences[1].append(states[1])
+    reward_sequences = defaultdict(list)
+    reward_sequences[0].append(0)
+    reward_sequences[1].append(0)
     times = [0, 0]
     done = [False, False]
     while not all(done):
@@ -141,9 +144,10 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic, device, seed=N
         states, rewards, done = env.step(actions)
         for agent_idx in range(2):
             state_sequences[agent_idx].append(states[agent_idx])
+            reward_sequences[agent_idx].append(rewards[agent_idx])
             times[agent_idx] += 1
 
-    return times, state_sequences, done
+    return times, state_sequences, reward_sequences, done
 
 
 def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, criterion, num_epochs, device):
@@ -170,18 +174,21 @@ def optimize_batch(model, data_loader, data_size, optimizer, lr_scheduler, crite
     return average_epoch_loss
 
 
-def update_memory(duplicate_model, memory, state_sequences, agent_idx, device):
+def update_memory(duplicate_model, memory, state_sequences, reward_sequences, gamma, agent_idx, device):
     """
     Estimate state values of finished episode and update the memory pool
 
     """
     state_sequence0 = state_sequences[agent_idx]
+    reward_sequence0 = reward_sequences[agent_idx]
     state_sequence1 = state_sequences[1-agent_idx]
     tg0 = sum([state is not None for state in state_sequence0])
     tg1 = sum([state is not None for state in state_sequence1])
     for step in range(tg0):
         state0 = state_sequence0[step]
-        value = duplicate_model(torch.Tensor([state0]), device).data.item()
+        reward0 = reward_sequence0[step]
+        # approximate the value with TD prediction based on the next state
+        value = reward0 + gamma * duplicate_model(torch.Tensor([state0]), device).data.item()
 
         # penalize non-cooperating behaviors
         state1 = state_sequence1[step]
@@ -274,8 +281,8 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     # else:
     #     seed = time.time()
     for _ in range(num_episodes):
-        times, state_sequences, end_signals = run_one_episode(model, phase, env, gamma,
-                                                              epsilon, kinematic, device)
+        times, state_sequences, reward_sequences, end_signals = run_one_episode(model, phase, env, gamma,
+                                                                                epsilon, kinematic, device)
         # success is defined on the group's success
         if end_signals[0] == 1 and end_signals[1] == 1:
             succ += 1
@@ -283,8 +290,8 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
         if end_signals[0] == 2 and end_signals[1] == 2:
             failure += 1
         if duplicate_model is not None and memory is not None:
-            update_memory(duplicate_model, memory, state_sequences, 0, device)
-            update_memory(duplicate_model, memory, state_sequences, 1, device)
+            update_memory(duplicate_model, memory, state_sequences, reward_sequences, gamma, 0, device)
+            update_memory(duplicate_model, memory, state_sequences, reward_sequences, gamma, 1, device)
 
     if len(etg) == 0:
         average_time = 0
