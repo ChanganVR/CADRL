@@ -10,7 +10,7 @@ from utils import Action, JointState
 def test_step():
     env_config = configparser.RawConfigParser()
     env_config.read('configs/test_env.config')
-    test_env = ENV(env_config)
+    test_env = ENV(env_config, phase='test')
     test_env.reset()
 
     # test state computation
@@ -37,6 +37,7 @@ def test_step():
     assert done_signals == [2, 2]
 
     # test reaching goal
+    test_env = ENV(env_config, phase='test')
     test_env.reset()
     test_env.step((Action(1, math.pi/2), Action(2, -math.pi/2)))
     test_env.step((Action(4, 0), Action(4, -math.pi)))

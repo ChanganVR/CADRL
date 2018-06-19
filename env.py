@@ -1,9 +1,11 @@
 import math
-from utils import JointState, Action
+import random
+import time
+from utils import JointState
 
 
 class Agent(object):
-    def __init__(self, px, py, pgx, pgy, radius, v_pref, theta, kinematic_constrained):
+    def __init__(self, px, py, pgx, pgy, radius, v_pref, theta, kinematic):
         self.px = px
         self.py = py
         self.vx = 0
@@ -13,12 +15,12 @@ class Agent(object):
         self.pgy = pgy
         self.v_pref = v_pref
         self.theta = theta
-        self.kinematic_constrained = kinematic_constrained
+        self.kinematic = kinematic
         self.done = False
 
     def update_state(self, action, time):
         self.px, self.py = self.compute_position(time=time, action=action)
-        if self.kinematic_constrained:
+        if self.kinematic:
             pass
         else:
             self.vx = math.cos(action.r) * action.v
@@ -37,7 +39,7 @@ class Agent(object):
             x = self.px + time * self.vx
             y = self.py + time * self.vy
         else:
-            if self.kinematic_constrained:
+            if self.kinematic:
                 if action.r == 0:
                     x = self.px + time * action.v * math.cos(self.theta)
                     y = self.py + time * action.v * math.sin(self.theta)
@@ -53,10 +55,10 @@ class Agent(object):
 
 
 class ENV(object):
-    def __init__(self, config):
+    def __init__(self, config, phase):
         self.radius = config.getfloat('agent', 'radius')
         self.v_pref = config.getfloat('agent', 'v_pref')
-        self.kinematic_constrained = config.getboolean('agent', 'kinematic_constrained')
+        self.kinematic = config.getboolean('agent', 'kinematic')
         self.agent_num = config.getint('sim', 'agent_num')
         self.xmin = config.getfloat('sim', 'xmin')
         self.xmax = config.getfloat('sim', 'xmax')
@@ -66,6 +68,9 @@ class ENV(object):
         self.max_time = config.getint('sim', 'max_time')
         self.agents = [None, None]
         self.counter = 0
+        assert phase in ['train', 'test']
+        self.phase = phase
+        self.test_counter = 0
 
     def compute_joint_state(self, agent_idx):
         if self.agents[agent_idx].done:
@@ -75,10 +80,18 @@ class ENV(object):
                               self.agents[1-agent_idx].get_observable_state()))
 
     def reset(self):
-        # randomly initialize the agents' positions
         cr = self.crossing_radius
-        self.agents[0] = Agent(-cr, 0, cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained)
-        self.agents[1] = Agent(cr, 0, -cr, 0, self.radius, self.v_pref, 0, self.kinematic_constrained)
+        self.agents[0] = Agent(-cr, 0, cr, 0, self.radius, self.v_pref, 0, self.kinematic)
+        if self.phase == 'train':
+            angle = random.random() * math.pi
+            while math.sin((math.pi - angle)/2) < 0.3/2:
+                angle = random.random() * math.pi
+        else:
+            angle = (self.test_counter % 10) / 10 * math.pi
+            self.test_counter += 1
+        x = cr * math.cos(angle)
+        y = cr * math.sin(angle)
+        self.agents[1] = Agent(x, y, -x, -y, self.radius, self.v_pref, 0, self.kinematic)
         self.counter = 0
 
         return [self.compute_joint_state(0), self.compute_joint_state(1)]

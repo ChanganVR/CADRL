@@ -2,6 +2,7 @@ import os
 import sys
 sys.path.append(os.getcwd())
 import numpy as np
+import torch
 from utils import Trajectory
 
 
@@ -16,7 +17,7 @@ def test_trajectory():
     positions = np.array(positions)
     traj = Trajectory(gamma, goal_x, goal_y, radius, v_pref, times, positions, False)
 
-    state_values_pairs = traj.generate_state_value_pairs()
+    state_values_pairs = traj.generate_state_value_pairs(torch.device('cpu'))
     assert len(state_values_pairs) == len(times) - 1
     assert np.allclose(state_values_pairs[0][0].numpy(), (0, 1, 0, 1, 0.3, 2, 0, 1, 0, 2, -1, 0, -1, 0.3))
     assert np.isclose(state_values_pairs[0][1], pow(gamma, 3))

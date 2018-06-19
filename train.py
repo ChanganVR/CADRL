@@ -39,7 +39,7 @@ def filter_velocity(joint_state, state_sequences, agent_idx):
     return filtered_v
 
 
-def propagate(state, v_est, kinematic_constrained, delta_t=1):
+def propagate(state, v_est, kinematic, delta_t=1):
     """
     Compute approximate next state with estimated velocity/action
 
@@ -52,7 +52,7 @@ def propagate(state, v_est, kinematic_constrained, delta_t=1):
     elif isinstance(state, FullState) and isinstance(v_est, Action):
         # propagate state of current agent
         # perform action without rotation
-        if kinematic_constrained:
+        if kinematic:
             # TODO: impose kinematic constraint and theta
             pass
         else:
@@ -66,12 +66,12 @@ def propagate(state, v_est, kinematic_constrained, delta_t=1):
     return state
 
 
-def build_action_space(v_pref, kinematic_constrained):
+def build_action_space(v_pref, kinematic):
     """
     Action space consists of 25 precomputed actions and 10 randomly sampled actions.
 
     """
-    if kinematic_constrained:
+    if kinematic:
         velocities = [i/4*v_pref for i in range(5)]
         rotations = [i/4*math.pi/3 - math.pi/6 for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
@@ -92,7 +92,7 @@ def build_action_space(v_pref, kinematic_constrained):
     return actions
 
 
-def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, device, seed=None):
+def run_one_episode(model, phase, env, gamma, epsilon, kinematic, device, seed=None):
     """
     Run two agents simultaneously without communication
 
@@ -115,12 +115,12 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, de
                 continue
 
             other_v_est = filter_velocity(state, state_sequences, agent_idx)
-            other_sn_est = propagate(ObservableState(*state[9:]), other_v_est, kinematic_constrained)
+            other_sn_est = propagate(ObservableState(*state[9:]), other_v_est, kinematic)
             max_value = float('-inf')
             best_action = None
             # pick action according to epsilon-greedy
             probability = random.random()
-            action_space = build_action_space(state.v_pref, kinematic_constrained)
+            action_space = build_action_space(state.v_pref, kinematic)
             if phase == 'train' and probability < epsilon:
                 action = random.choice(action_space)
             else:
@@ -128,7 +128,7 @@ def run_one_episode(model, phase, env, gamma, epsilon, kinematic_constrained, de
                     temp_actions = [None] * 2
                     temp_actions[agent_idx] = action
                     reward, _ = env.compute_reward(agent_idx, temp_actions)
-                    sn_est = propagate(FullState(*state[:9]), action, kinematic_constrained)
+                    sn_est = propagate(FullState(*state[:9]), action, kinematic)
                     sn_est = torch.Tensor([sn_est + other_sn_est]).to(device)
                     value = reward + pow(gamma, state.v_pref) * model(sn_est, device).data.item()
                     if value > max_value:
@@ -202,7 +202,7 @@ def update_memory(duplicate_model, memory, state_sequences, agent_idx, device):
         memory.push((state0, value))
 
 
-def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device):
+def initialize_memory(traj_dir, gamma, capacity, kinematic, device):
     memory = ReplayMemory(capacity=capacity)
     for traj_file in os.listdir(traj_dir):
         # parse trajectory data to state-value pairs
@@ -218,9 +218,9 @@ def initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device):
             positions = np.array(positions)
 
         trajectory1 = Trajectory(gamma, *[float(x) for x in lines[0].split()],
-                                 times, positions, kinematic_constrained)
+                                 times, positions, kinematic)
         trajectory2 = Trajectory(gamma, *[float(x) for x in lines[1].split()],
-                                 times, positions[:, ::-1, :], kinematic_constrained)
+                                 times, positions[:, ::-1, :], kinematic)
         generated_pairs = trajectory1.generate_state_value_pairs(device) + trajectory2.generate_state_value_pairs(device)
         for pair in generated_pairs:
             memory.push(pair)
@@ -261,7 +261,7 @@ def initialize_model(model, memory, model_config, device):
     return model
 
 
-def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kinematic_constrained, duplicate_model, memory, device):
+def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kinematic, duplicate_model, memory, device):
     """
     Run k episodes and measure the average time to goal, access rate and failure rate
 
@@ -275,7 +275,7 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     #     seed = time.time()
     for _ in range(num_episodes):
         times, state_sequences, end_signals = run_one_episode(model, phase, env, gamma,
-                                                              epsilon, kinematic_constrained, device)
+                                                              epsilon, kinematic, device)
         # success is defined on the group's success
         if end_signals[0] == 1 and end_signals[1] == 1:
             succ += 1
@@ -309,15 +309,15 @@ def train(model, memory, model_config, env_config, device, weight_file):
     epsilon_end = model_config.getfloat('train', 'epsilon_end')
     epsilon_decay = model_config.getfloat('train', 'epsilon_decay')
     num_epochs = model_config.getint('train', 'num_epochs')
-    kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
+    kinematic = env_config.getboolean('agent', 'kinematic')
     checkpoint_interval = model_config.getint('train', 'checkpoint_interval')
 
     criterion = nn.MSELoss().to(device)
     data_loader = DataLoader(memory, batch_size, shuffle=True)
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
-    train_env = ENV(config=env_config)
-    test_env = ENV(config=env_config)
+    train_env = ENV(config=env_config, phase='train')
+    test_env = ENV(config=env_config, phase='test')
     duplicate_model = copy.deepcopy(model)
 
     episode = 0
@@ -331,19 +331,18 @@ def train(model, memory, model_config, env_config, device, weight_file):
         # test
         if episode % test_interval == 0:
             run_k_episodes(test_episodes, episode, model, 'test', test_env, gamma, epsilon,
-                           kinematic_constrained, None, None, device)
+                           kinematic, None, None, device)
             # update duplicate model
             duplicate_model = copy.deepcopy(model)
 
         # sample k episodes into memory and optimize over the generated memory
         run_k_episodes(sample_episodes, episode, model, 'train', train_env, gamma, epsilon,
-                       kinematic_constrained, duplicate_model, memory, device)
+                       kinematic, duplicate_model, memory, device)
         optimize_batch(model, data_loader, len(memory), optimizer, None, criterion, num_epochs, device)
         episode += 1
 
         if episode != 0 and episode % checkpoint_interval == 0:
             torch.save(model.state_dict(), weight_file)
-
 
     return model
 
@@ -390,9 +389,9 @@ def main():
     # load simulated data from ORCA
     traj_dir = model_config.get('init', 'traj_dir')
     gamma = model_config.getfloat('model', 'gamma')
-    kinematic_constrained = env_config.getboolean('agent', 'kinematic_constrained')
+    kinematic = env_config.getboolean('agent', 'kinematic')
     capacity = model_config.getint('train', 'capacity')
-    memory = initialize_memory(traj_dir, gamma, capacity, kinematic_constrained, device)
+    memory = initialize_memory(traj_dir, gamma, capacity, kinematic, device)
 
     # initialize model
     if os.path.exists(initialized_weights):
