@@ -79,7 +79,7 @@ class ENV(object):
             return JointState(*(self.agents[agent_idx].get_full_state() +
                               self.agents[1-agent_idx].get_observable_state()))
 
-    def reset(self):
+    def reset(self, case=None):
         cr = self.crossing_radius
         self.agents[0] = Agent(-cr, 0, cr, 0, self.radius, self.v_pref, 0, self.kinematic)
         if self.phase == 'train':
@@ -87,8 +87,12 @@ class ENV(object):
             while math.sin((math.pi - angle)/2) < 0.3/2:
                 angle = random.random() * math.pi
         else:
-            angle = (self.test_counter % 10) / 10 * math.pi
-            self.test_counter += 1
+            if case is not None:
+                angle = (case % 10) / 10 * math.pi
+                self.test_counter = case
+            else:
+                angle = (self.test_counter % 10) / 10 * math.pi
+                self.test_counter += 1
         x = cr * math.cos(angle)
         y = cr * math.sin(angle)
         self.agents[1] = Agent(x, y, -x, -y, self.radius, self.v_pref, 0, self.kinematic)

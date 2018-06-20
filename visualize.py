@@ -9,7 +9,7 @@ from env import ENV
 from train import run_one_episode
 
 
-def visualize(model_config, env_config, weight_path):
+def visualize(model_config, env_config, weight_path, case):
     state_dim = model_config.getint('model', 'state_dim')
     gamma = model_config.getfloat('model', 'gamma')
     bxmin = env_config.getfloat('sim', 'xmin')
@@ -26,8 +26,7 @@ def visualize(model_config, env_config, weight_path):
 
     device = torch.device('cpu')
     test_env = ENV(config=env_config, phase='test')
-    for i in range(9):
-        test_env.reset()
+    test_env.reset(case)
     model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100])
     model.load_state_dict(torch.load(weight_path, map_location=lambda storage, loc: storage))
     _, state_sequences, _, _ = run_one_episode(model, 'test', test_env, gamma, None, kinematic, device)
@@ -81,6 +80,7 @@ def main():
     parser = argparse.ArgumentParser('Parse configuration file')
     parser.add_argument('output_dir', type=str)
     parser.add_argument('--init', default=False, action='store_true')
+    parser.add_argument('--case', default=0, type=int)
     args = parser.parse_args()
     config_file = os.path.join(args.output_dir, 'model.config')
     if args.init:
@@ -93,7 +93,7 @@ def main():
     env_config = configparser.RawConfigParser()
     env_config.read('configs/env.config')
 
-    visualize(model_config, env_config, weight_file)
+    visualize(model_config, env_config, weight_file, args.case)
 
 
 if __name__ == '__main__':
