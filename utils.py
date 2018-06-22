@@ -1,3 +1,4 @@
+import math
 import torch
 from collections import namedtuple
 from torch.utils.data import Dataset
@@ -67,7 +68,7 @@ class Trajectory(object):
             pgy = self.goal_y
             v_pref = self.v_pref
             if self.kinematic:
-                theta = 0
+                theta = math.atan2(vy, vx)
             else:
                 theta = 0
 

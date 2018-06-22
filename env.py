@@ -1,6 +1,5 @@
 import math
 import random
-import time
 from utils import JointState
 
 
@@ -21,7 +20,9 @@ class Agent(object):
     def update_state(self, action, time):
         self.px, self.py = self.compute_position(time=time, action=action)
         if self.kinematic:
-            pass
+            self.theta += action.r
+            self.vx = math.cos(self.theta) * action.v
+            self.vy = math.sin(self.theta) * action.v
         else:
             self.vx = math.cos(action.r) * action.v
             self.vy = math.sin(action.r) * action.v
@@ -40,14 +41,8 @@ class Agent(object):
             y = self.py + time * self.vy
         else:
             if self.kinematic:
-                if action.r == 0:
-                    x = self.px + time * action.v * math.cos(self.theta)
-                    y = self.py + time * action.v * math.sin(self.theta)
-                else:
-                    x = self.px + action.v / pow(action.r, 2) * (time * math.sin(self.theta + action.r * time) +
-                                                                 math.cos(self.theta+action.r*time) - math.cos(self.theta))
-                    y = self.py - action.v / pow(action.r, 2) * (action.r * time * math.cos(self.theta + action.r * time) -
-                                                                 math.sin(self.theta+action.r*time) + math.sin(self.theta))
+                x = self.px + time * math.cos(self.theta + action.r) * action.v
+                y = self.py + time * math.sin(self.theta + action.r) * action.v
             else:
                 x = self.px + time * math.cos(action.r) * action.v
                 y = self.py + time * math.sin(action.r) * action.v
@@ -95,7 +90,8 @@ class ENV(object):
                 self.test_counter += 1
         x = cr * math.cos(angle)
         y = cr * math.sin(angle)
-        self.agents[1] = Agent(x, y, -x, -y, self.radius, self.v_pref, 0, self.kinematic)
+        theta = angle + math.pi
+        self.agents[1] = Agent(x, y, -x, -y, self.radius, self.v_pref, theta, self.kinematic)
         self.counter = 0
 
         return [self.compute_joint_state(0), self.compute_joint_state(1)]

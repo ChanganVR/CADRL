@@ -27,13 +27,7 @@ def filter_velocity(joint_state, state_sequences, agent_idx):
     Compute the other agent's average velocity in last two time steps
 
     """
-    # TODO: filter speed
-    # if agent_idx not in state_sequences:
-    #     prev_v = Velocity(0, 0)
-    # else:
-    #     prev_v = Velocity(state_sequences[agent_idx][-1].vx1, state_sequences[agent_idx][-1].vy1)
-    # current_v = Velocity(joint_state.vx1, joint_state.vy1)
-    # filtered_v = Velocity((prev_v.x+current_v.x)/2, (prev_v.y+current_v.y)/2)
+    # TODO: filter velocity and avoid oscillation
     filtered_v = Velocity(joint_state.vx1, joint_state.vy1)
 
     return filtered_v
@@ -53,13 +47,13 @@ def propagate(state, v_est, kinematic, delta_t=1):
         # propagate state of current agent
         # perform action without rotation
         if kinematic:
-            # TODO: impose kinematic constraint and theta
-            pass
+            new_px = state.px + math.cos(state.theta + v_est.r) * v_est.v * delta_t
+            new_py = state.py + math.sin(state.theta + v_est.r) * v_est.v * delta_t
         else:
             new_px = state.px + math.cos(v_est.r) * v_est.v * delta_t
             new_py = state.py + math.sin(v_est.r) * v_est.v * delta_t
-            state = FullState(new_px, new_py, state.vx, state.vy, state.radius,
-                              state.pgx, state.pgy, state.v_pref, state.theta)
+        state = FullState(new_px, new_py, state.vx, state.vy, state.radius,
+                          state.pgx, state.pgy, state.v_pref, state.theta)
     else:
         raise ValueError('Type error')
 
@@ -72,16 +66,17 @@ def build_action_space(v_pref, kinematic):
 
     """
     if kinematic:
-        velocities = [i/4*v_pref for i in range(5)]
+        velocities = [(i + 1) / 5 * v_pref for i in range(5)]
         rotations = [i/4*math.pi/3 - math.pi/6 for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
-        for i in range(10):
+        for i in range(25):
             random_velocity = random.random() * v_pref
             random_rotation = random.random() * math.pi/3 - math.pi/6
             actions.append(Action(random_velocity, random_rotation))
+        actions.append(Action(0, 0))
     else:
-        velocities = [(i+1)/5*v_pref for i in range(5)]
-        rotations = [i/4*2*math.pi for i in range(5)]
+        velocities = [(i + 1) / 5 * v_pref for i in range(5)]
+        rotations = [i / 4 * 2 * math.pi for i in range(5)]
         actions = [Action(*x) for x in itertools.product(velocities, rotations)]
         for i in range(25):
             random_velocity = random.random() * v_pref
@@ -202,7 +197,6 @@ def update_memory(duplicate_model, memory, state_sequences, reward_sequences, ga
         else:
             te1 = tg1-1-step - np.linalg.norm((state1.px-state1.pgx, state1.py-state1.pgy))/state1.v_pref
         if te0 < 1 and te1 > 6:
-            # TODO: explore different configurations
             value -= 0.1
 
         state0 = torch.Tensor(state0).to(device)
@@ -277,10 +271,6 @@ def run_k_episodes(num_episodes, episode, model, phase, env, gamma, epsilon, kin
     etg = []
     succ = 0
     failure = 0
-    # if phase == 'test':
-    #     seed = 0
-    # else:
-    #     seed = time.time()
     for _ in range(num_episodes):
         times, state_sequences, reward_sequences, end_signals = run_one_episode(model, phase, env, gamma,
                                                                                 epsilon, kinematic, device)
@@ -391,13 +381,13 @@ def main():
 
     # configure model
     state_dim = model_config.getint('model', 'state_dim')
-    model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100]).to(device)
+    kinematic = env_config.getboolean('agent', 'kinematic')
+    model = ValueNetwork(state_dim=state_dim, fc_layers=[150, 100, 100], kinematic=kinematic).to(device)
     logging.debug('Trainable parameters: {}'.format([name for name, p in model.named_parameters() if p.requires_grad]))
 
     # load simulated data from ORCA
     traj_dir = model_config.get('init', 'traj_dir')
     gamma = model_config.getfloat('model', 'gamma')
-    kinematic = env_config.getboolean('agent', 'kinematic')
     capacity = model_config.getint('train', 'capacity')
     memory = initialize_memory(traj_dir, gamma, capacity, kinematic, device)
 
