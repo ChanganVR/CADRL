@@ -1,3 +1,4 @@
+import math
 import torch
 from collections import namedtuple
 from torch.utils.data import Dataset
@@ -36,7 +37,7 @@ class ReplayMemory(Dataset):
 
 
 class Trajectory(object):
-    def __init__(self, gamma, goal_x, goal_y, radius, v_pref, times, positions, kinematic_constrained):
+    def __init__(self, gamma, goal_x, goal_y, radius, v_pref, times, positions, kinematic):
         self.gamma = gamma
         self.goal_x = goal_x
         self.goal_y = goal_y
@@ -45,7 +46,7 @@ class Trajectory(object):
         self.times = times
         # time steps, 2 agents, xy coordinates
         self.positions = positions
-        self.kinematic_constrained = kinematic_constrained
+        self.kinematic = kinematic
 
     @staticmethod
     def compute_value(gamma, time_to_goal, v_pref):
@@ -66,8 +67,8 @@ class Trajectory(object):
             pgx = self.goal_x
             pgy = self.goal_y
             v_pref = self.v_pref
-            if self.kinematic_constrained:
-                theta = 0
+            if self.kinematic:
+                theta = math.atan2(vy, vx)
             else:
                 theta = 0
 

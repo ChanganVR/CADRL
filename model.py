@@ -23,18 +23,18 @@ class IndexTranslator(object):
 
 
 class ValueNetwork(nn.Module):
-    def __init__(self, state_dim, fc_layers, reparametrization=True):
+    def __init__(self, state_dim, fc_layers, kinematic, reparametrization=True):
         super(ValueNetwork, self).__init__()
         self.reparametrization = reparametrization
         if reparametrization:
             state_dim = 15
+        self.kinematic = kinematic
         self.value_network = nn.Sequential(nn.Linear(state_dim, fc_layers[0]), nn.ReLU(),
                                            nn.Linear(fc_layers[0], fc_layers[1]), nn.ReLU(),
                                            nn.Linear(fc_layers[1], fc_layers[2]), nn.ReLU(),
                                            nn.Linear(fc_layers[2], 1))
 
-    @staticmethod
-    def rotate(state, device):
+    def rotate(self, state, device):
         # first translate the coordinate then rotate around the origin
         # 'px', 'py', 'vx', 'vy', 'radius', 'pgx', 'pgy', 'v_pref', 'theta', 'px1', 'py1', 'vx1', 'vy1', 'radius1'
         #  0     1      2     3      4        5     6         7        8       9      10     11    12       13
@@ -48,8 +48,10 @@ class ValueNetwork(nn.Module):
         vx = state.vx * np.cos(rot) + state.vy * np.sin(rot)
         vy = state.vy * np.cos(rot) - state.vx * np.sin(rot)
         radius = state.radius
-        # TODO: without kinematic constraint, simply keep theta as 0
-        theta = state.theta
+        if self.kinematic:
+            theta = state.theta - rot
+        else:
+            theta = state.theta
         vx1 = state.vx1 * np.cos(rot) + state.vy1 * np.sin(rot)
         vy1 = state.vy1 * np.cos(rot) - state.vx1 * np.sin(rot)
         px1 = (state.px1 - state.px) * np.cos(rot) + (state.py1 - state.py) * np.sin(rot)
