@@ -3,6 +3,8 @@ Implementation of paper [Decentralized Non-communicating Multiagent
 Collision Avoidance with Deep Reinforcement Learning](https://arxiv.org/abs/1609.07845)
 by Yu Fan Chen, Miao Liu, Michael Everett and Jonathan P. How
 
+This library is no longer maintained. CADRL and GA3C-CADRL is also implemented in our newest library [CrowdNav](https://github.com/vita-epfl/CrowdNav),
+which is easier to use and can be better used for benchmarking RL navigation algorithms.
 
 ## Usage
 Training with specified configuration on CPU:
